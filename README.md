@@ -6,7 +6,6 @@ UVP Tools is a tool that integrates the Xen front-end driver and uvp-monitor (vi
 The Xen front-end driver improves I/O processing efficiency of VMs. The uvp-monitor helps administrators gain visibility into VM running status.
 
 Components of the Xen front-end driver:
-
   - xen-platform-pci driver: Xen front-end pci driver, which provides xenbus access, establishes event channels, and grants references.
   - xen-balloon driver: Xen front-end balloon driver, which adjusts VM memory through the host.
   - xen-vbd/xen-blkfront driver: Xen front-end disk driver.
@@ -17,7 +16,6 @@ Components of the Xen front-end driver:
   - vni driver: virtio driver.
 
 Features of uvp-monitor:
-
   - Collects information about resource usage of every VM and periodically writes the information into domain0 through xenstore. The resource usage information includes the total number of CPUs. CPU usage, memory capacity, memory usage, disk capacity, disk usage, and the number of packets received or sent by a NIC.
   - Collects VM hostnames and writes them into domain0 through xenstore.
   - Notifies domain0 whether the current VM supports hot-plug of memory, CPUs, and disks.
@@ -25,51 +23,33 @@ Features of uvp-monitor:
   - Facilitates self-upgrade of UVP Tools on VMs. The uvp-monitor works with xenstore to notify domain0 of the UVP Tools version installed on VMs. If the UVP Tools version on a VM is different from the UVP Tools version on the host, the UVP Tools on the VM is then automatically upgraded to the version installed on the host.
 
 Structure of UVP Tools source code:
-
-UVP-tools-linux-src-2.2.0.xxx
-
+UVP-Tools
 ├── bin/             # Directory that stores tools required for installing and using UVP Tools, such as the tool used for acquiring Linux distribution information and the disk hot-plug tool.
-
 ├── build_tools      # Scripts used for building the UVP Tools package.
-
 ├── config/          # Directory that stores UDEV rules used by UVP Tools.
-
 ├── cpfile.sh        # Tool for copying components of the UVP Tools compatible with the current Linux distribution during self-upgrade of UVP Tools.
-
 ├── install          # Scripts for installing, uninstalling, and upgrading the UVP Tools package.
-
 ├── Makefile         # File that define rules for building the UVP Tools package.
-
 ├── README           # Readme file of UVP Tools.
-
 ├── upg.sh           # Script for self-upgrading UVP Tools on a VM to the UVP Tools version installed on the host.
-
 ├── uvp-monitor/     # Source code of uvp-monitor.
-
 ├── uvp-xenpv/       # Source code of the Xen front-end driver.
-
 │ ├── uvp-classic_xen_driver-2.6.32to3.0.x/   # Source code of the classic Xen front-end driver, which works well with SLES 11 SP.
-
 │ ├── uvp-classic_xen_driver-3.12.xto3.16.x/  # Source code of the classic Xen front-end driver, which works well with SLES 12 SP and openSUSE 13.2.
-
 │ ├── uvp-pvops_xen_driver-2.6.32to4.0.x/     # Source code of the pvops front-end driver, which works well with CentOS/RHEL 6.x, Debian 8, and Fedora 22.
-
 │ └── others/       # Source code of the classic Xen front-end driver, which works well with CentOS/RHEL 4.x/5.x, Fedora 9/12, SLES 10 SP, and Ubuntu 8/12.
-
 └── version.ini      # Version information of UVP Tools source code.
 
-
 Installing UVP Tools
-
   - Obtain the UVP Tools source code package. Save the UVP Tools source code package to a directory on the Linux VM where UVP Tools will be installed, and unpack the UVP Tools source code package. Be sure that you have the permission to access this directory.
 	    tar -xzf UVP-tools-linux-src-<2.2.0.xxx>.tar.gz
+	    or gunzip UVP-Tools-master.zip
 	
     The Linux VM where UVP Tools will be installed must come with gcc, make, libc, and kernel-devel. For simplicity purposes, the Linux VM where UVP Tools will be installed is referred to as the Linux VM.
 
   - Go to the uvp-monitor directory. Run the following command to build uvp-monitor:
         make uvp-monitor-xx
         xx is the number of bits that the CPU of the operating system run by the Linux VM can process simultaneously. Replace xx with 32 if a 32-bit x86-based CPU (386 or higher) is in use. Replace xx with 64 if a x86_64 CPU is in use.
-
     
     If uvp-monitor needs to be installed, run the following command:
         make install
