@@ -23,21 +23,37 @@ Features of uvp-monitor:
   - Facilitates self-upgrade of UVP Tools on VMs. The uvp-monitor works with xenstore to notify domain0 of the UVP Tools version installed on VMs. If the UVP Tools version on a VM is different from the UVP Tools version on the host, the UVP Tools on the VM is then automatically upgraded to the version installed on the host.
 
 Structure of UVP Tools source code:
+
 UVP-Tools
+
 ├── bin/             # Directory that stores tools required for installing and using UVP Tools, such as the tool used for acquiring Linux distribution information and the disk hot-plug tool.
+
 ├── build_tools      # Scripts used for building the UVP Tools package.
+
 ├── config/          # Directory that stores UDEV rules used by UVP Tools.
+
 ├── cpfile.sh        # Tool for copying components of the UVP Tools compatible with the current Linux distribution during self-upgrade of UVP Tools.
+
 ├── install          # Scripts for installing, uninstalling, and upgrading the UVP Tools package.
+
 ├── Makefile         # File that define rules for building the UVP Tools package.
+
 ├── README           # Readme file of UVP Tools.
+
 ├── upg.sh           # Script for self-upgrading UVP Tools on a VM to the UVP Tools version installed on the host.
+
 ├── uvp-monitor/     # Source code of uvp-monitor.
+
 ├── uvp-xenpv/       # Source code of the Xen front-end driver.
+
 │ ├── uvp-classic_xen_driver-2.6.32to3.0.x/   # Source code of the classic Xen front-end driver, which works well with SLES 11 SP.
+
 │ ├── uvp-classic_xen_driver-3.12.xto3.16.x/  # Source code of the classic Xen front-end driver, which works well with SLES 12 SP and openSUSE 13.2.
+
 │ ├── uvp-pvops_xen_driver-2.6.32to4.0.x/     # Source code of the pvops front-end driver, which works well with CentOS/RHEL 6.x, Debian 8, and Fedora 22.
+
 │ └── others/       # Source code of the classic Xen front-end driver, which works well with CentOS/RHEL 4.x/5.x, Fedora 9/12, SLES 10 SP, and Ubuntu 8/12.
+
 └── version.ini      # Version information of UVP Tools source code.
 
 Installing UVP Tools
