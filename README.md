@@ -4,7 +4,9 @@ The following is the readme file of UVP Tools 2.2.0. From the readme file, you w
 What Is a UVP Tools Project?
 UVP Tools is a tool that integrates the Xen front-end driver and uvp-monitor (virtual machine monitoring program). It is designed for use on virtual machines (VMs) equipped with a 32-bit x86-based CPU (386 or higher) or x86_64 CPU.
 The Xen front-end driver improves I/O processing efficiency of VMs. The uvp-monitor helps administrators gain visibility into VM running status.
+
 Components of the Xen front-end driver:
+
   - xen-platform-pci driver: Xen front-end pci driver, which provides xenbus access, establishes event channels, and grants references.
   - xen-balloon driver: Xen front-end balloon driver, which adjusts VM memory through the host.
   - xen-vbd/xen-blkfront driver: Xen front-end disk driver.
@@ -15,6 +17,7 @@ Components of the Xen front-end driver:
   - vni driver: virtio driver.
 
 Features of uvp-monitor:
+
   - Collects information about resource usage of every VM and periodically writes the information into domain0 through xenstore. The resource usage information includes the total number of CPUs. CPU usage, memory capacity, memory usage, disk capacity, disk usage, and the number of packets received or sent by a NIC.
   - Collects VM hostnames and writes them into domain0 through xenstore.
   - Notifies domain0 whether the current VM supports hot-plug of memory, CPUs, and disks.
@@ -22,25 +25,42 @@ Features of uvp-monitor:
   - Facilitates self-upgrade of UVP Tools on VMs. The uvp-monitor works with xenstore to notify domain0 of the UVP Tools version installed on VMs. If the UVP Tools version on a VM is different from the UVP Tools version on the host, the UVP Tools on the VM is then automatically upgraded to the version installed on the host.
 
 Structure of UVP Tools source code:
+
 UVP-tools-linux-src-2.2.0.xxx
-©À©¤©¤ bin/             # Directory that stores tools required for installing and using UVP Tools, such as the tool used for acquiring Linux distribution information and the disk hot-plug tool.
-©À©¤©¤ build_tools      # Scripts used for building the UVP Tools package.
-©À©¤©¤ config/          # Directory that stores UDEV rules used by UVP Tools.
-©À©¤©¤ cpfile.sh        # Tool for copying components of the UVP Tools compatible with the current Linux distribution during self-upgrade of UVP Tools.
-©À©¤©¤ install          # Scripts for installing, uninstalling, and upgrading the UVP Tools package.
-©À©¤©¤ Makefile         # File that define rules for building the UVP Tools package.
-©À©¤©¤ README           # Readme file of UVP Tools.
-©À©¤©¤ upg.sh           # Script for self-upgrading UVP Tools on a VM to the UVP Tools version installed on the host.
-©À©¤©¤ uvp-monitor/     # Source code of uvp-monitor.
-©À©¤©¤ uvp-xenpv/       # Source code of the Xen front-end driver.
-©¦ ©À©¤©¤ uvp-classic_xen_driver-2.6.32to3.0.x/   # Source code of the classic Xen front-end driver, which works well with SLES 11 SP.
-©¦ ©À©¤©¤ uvp-classic_xen_driver-3.12.xto3.16.x/  # Source code of the classic Xen front-end driver, which works well with SLES 12 SP and openSUSE 13.2.
-©¦ ©À©¤©¤ uvp-pvops_xen_driver-2.6.32to4.0.x/     # Source code of the pvops front-end driver, which works well with CentOS/RHEL 6.x, Debian 8, and Fedora 22.
-©¦ ©¸©¤©¤ others/       # Source code of the classic Xen front-end driver, which works well with CentOS/RHEL 4.x/5.x, Fedora 9/12, SLES 10 SP, and Ubuntu 8/12.
-©¸©¤©¤ version.ini      # Version information of UVP Tools source code.
+
+â”œâ”€â”€ bin/             # Directory that stores tools required for installing and using UVP Tools, such as the tool used for acquiring Linux distribution information and the disk hot-plug tool.
+
+â”œâ”€â”€ build_tools      # Scripts used for building the UVP Tools package.
+
+â”œâ”€â”€ config/          # Directory that stores UDEV rules used by UVP Tools.
+
+â”œâ”€â”€ cpfile.sh        # Tool for copying components of the UVP Tools compatible with the current Linux distribution during self-upgrade of UVP Tools.
+
+â”œâ”€â”€ install          # Scripts for installing, uninstalling, and upgrading the UVP Tools package.
+
+â”œâ”€â”€ Makefile         # File that define rules for building the UVP Tools package.
+
+â”œâ”€â”€ README           # Readme file of UVP Tools.
+
+â”œâ”€â”€ upg.sh           # Script for self-upgrading UVP Tools on a VM to the UVP Tools version installed on the host.
+
+â”œâ”€â”€ uvp-monitor/     # Source code of uvp-monitor.
+
+â”œâ”€â”€ uvp-xenpv/       # Source code of the Xen front-end driver.
+
+â”‚ â”œâ”€â”€ uvp-classic_xen_driver-2.6.32to3.0.x/   # Source code of the classic Xen front-end driver, which works well with SLES 11 SP.
+
+â”‚ â”œâ”€â”€ uvp-classic_xen_driver-3.12.xto3.16.x/  # Source code of the classic Xen front-end driver, which works well with SLES 12 SP and openSUSE 13.2.
+
+â”‚ â”œâ”€â”€ uvp-pvops_xen_driver-2.6.32to4.0.x/     # Source code of the pvops front-end driver, which works well with CentOS/RHEL 6.x, Debian 8, and Fedora 22.
+
+â”‚ â””â”€â”€ others/       # Source code of the classic Xen front-end driver, which works well with CentOS/RHEL 4.x/5.x, Fedora 9/12, SLES 10 SP, and Ubuntu 8/12.
+
+â””â”€â”€ version.ini      # Version information of UVP Tools source code.
 
 
 Installing UVP Tools
+
   - Obtain the UVP Tools source code package. Save the UVP Tools source code package to a directory on the Linux VM where UVP Tools will be installed, and unpack the UVP Tools source code package. Be sure that you have the permission to access this directory.
 	    tar -xzf UVP-tools-linux-src-<2.2.0.xxx>.tar.gz
 	
@@ -65,6 +85,4 @@ Installing UVP Tools
 What can you do if a problem is encountered?
   1. Briefly describe your problem. An one-line summary is recommended.
   2. Describe your problem in detail, including environments, log information, and automatic handling of the problem.
-  3. Send the mail to xxx for further assistance.
-
-
+  3. Send the mail to uvptools@huawei.com for further assistance.
