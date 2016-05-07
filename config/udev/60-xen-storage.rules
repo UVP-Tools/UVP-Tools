@@ -1,0 +1,12 @@
+###
+KERNEL=="xvd*", IMPORT{program}="%XEN_ID% $kernel"
+###KERNEL=="xvdd", SYMLINK+="cdrom"
+
+KERNEL=="xvd*[!0-9]", ENV{EMU_SERIAL}=="?*", SYMLINK+="$env{EMU_KERNEL}"
+KERNEL=="xvd*[!0-9]", ENV{EMU_SERIAL}=="?*", SYMLINK+="disk/by-id/$env{EMU_BUS}-$env{EMU_MODEL}_$env{EMU_SERIAL}"
+KERNEL=="xvd*[!0-9]", ENV{EMU_BUS2}=="?*", SYMLINK+="disk/by-id/$env{EMU_BUS2}-$env{EMU_MODEL2}_$env{EMU_SERIAL}"
+
+KERNEL=="xvd*[0-9]", ENV{EMU_SERIAL}=="?*", SYMLINK+="$env{EMU_KERNEL}%n"
+KERNEL=="xvd*[0-9]", ENV{EMU_SERIAL}=="?*", SYMLINK+="disk/by-id/$env{EMU_BUS}-$env{EMU_MODEL}_$env{EMU_SERIAL}-part%n"
+KERNEL=="xvd*[0-9]", ENV{EMU_BUS2}=="?*", SYMLINK+="disk/by-id/$env{EMU_BUS2}-$env{EMU_MODEL2}_$env{EMU_SERIAL}-part%n"
+

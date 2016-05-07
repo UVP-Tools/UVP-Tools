@@ -1,0 +1,179 @@
+#!/bin/bash
+#######################################################################################
+# 2010-7-6 chentao
+# Description: If VM is configured with the tablet usb parameter, then check 
+#              the configuration of the event number for the usb mouse in the 
+#              /etc/X11/xorg.conf and make some changes based on specific conditions.
+#              If VM is configured with the mouse ps2 parameter or this script is 
+#              uninstalled with PV Driver, then revert the conf to the original state.
+#######################################################################################
+
+XORG_CONF='/etc/X11/xorg.conf'
+INPUT_DEVICES='/proc/bus/input/devices'
+if [ ! -f "${XORG_CONF}" -o ! -f "${INPUT_DEVICES}" ]
+then
+    exit 0
+fi
+
+###############################################################################
+# Config File Editor
+###############################################################################
+### modification operations
+MARKER_BEGIN='###pvdriver<begin>'
+MARKER_END='###pvdriver<end>'
+MARKER_COMMENT='###pvdriver#'
+MARKER_WARNING=' do not change this comment'
+insert_block()
+{
+    object_file=$1
+    anchor_address=$2
+    block_text=$3
+    
+    test ! -f "$object_file" && return 2
+    sed_cmd='a'
+    ###
+    if [ "${anchor_address}" = '$' ]
+    then
+        anchor_address='$'
+    elif [ "${anchor_address}" = '0' ]
+    then
+        anchor_address=1
+        sed_cmd='i'
+    elif [ -z "$(echo "${anchor_address}" | sed -n '/^\s*[0-9]\+\s*$/p')" ]
+    then
+        anchor_address=$(echo "${anchor_address}" | sed 's/\//\\\//g')
+        anchor_address="/${anchor_address}/"
+    fi
+    
+    ###
+    if [ -s "$object_file" ]
+    then
+        sed -i "${anchor_address}${sed_cmd}\
+${MARKER_BEGIN}${MARKER_WARNING}\n\
+$(echo "$block_text" | sed ':a;N;s/\n/\\n/;ta')\n\
+${MARKER_END}${MARKER_WARNING}" "$object_file"
+    else
+        cat > "$object_file" << EOF
+${MARKER_BEGIN}${MARKER_WARNING}
+$block_text
+${MARKER_END}${MARKER_WARNING}
+EOF
+    fi
+    ret=$?
+    
+    if [ $ret = 0 ]
+    then
+        return $ret
+    else
+        abort "insert_block $object_file with ${anchor_address} failed."
+    fi
+}
+
+remove_block()
+{
+    object_file=$1
+    
+    test ! -f "$object_file" && return 2
+    
+    while :; do
+        marker_begin_line=$(grep -n "${MARKER_BEGIN}.*" "${object_file}" | sed -n '1p' | awk -F ':' '{print $1}')
+        marker_end_line=$(grep -n "${MARKER_END}.*" "${object_file}" | sed -n '1p' | awk -F ':' '{print $1}')
+        test -z "${marker_begin_line}" -o -z "${marker_end_line}" && break
+        if ! sed -i "${marker_begin_line},${marker_end_line}d" "${object_file}"
+        then
+            abort "remove_block $object_file failed."
+        fi
+    done
+}
+
+comment_on_line()
+{
+    object_file=$1
+    anchor_address=$2
+    anchor_expreg=$3
+    
+    test ! -f "$object_file" && return 2
+    
+    ###
+    if [ "${anchor_address}" = '$' ]
+    then
+        anchor_address='$'
+    elif [ -z "$(echo "${anchor_address}" | sed -n '/^\s*[0-9]\+\s*$/p')" ]
+    then
+        anchor_address=$(echo "${anchor_address}" | sed 's/\//\\\//g')
+        anchor_address="/${anchor_address}/"
+    fi
+    
+    ###
+    anchor_expreg=$(echo "${anchor_expreg}" | sed 's/\//\\\//g')
+    if ! sed -i "${anchor_address}s;\(${anchor_expreg}.*\);${MARKER_COMMENT}\1;g" "$object_file"
+    then
+        abort "comment_on_line $object_file at ${anchor_expreg} failed."
+    fi
+}
+
+comment_off_line()
+{
+    object_file=$1
+    
+    test ! -f "$object_file" && return 2
+    
+    ###
+    if ! sed -i "s;\(^\s*\)${MARKER_COMMENT}\(.*\);\1\2;g" "$object_file"
+    then
+        abort "comment_off_line $object_file at ${anchor_expreg} failed."
+    fi
+}
+
+###############################################################################
+# Config File Editor
+###############################################################################
+
+ChangeXorg()
+{
+    remove_block "${XORG_CONF}"
+    comment_off_line "${XORG_CONF}"
+    
+    ### add UvpMouseEvent
+    usb_tablet_line=$(sed -n '/QEMU\s*USB\s*Tablet/=' "${INPUT_DEVICES}" | sed -n '1p')
+    usb_tablet_event=$(sed -n "${usb_tablet_line},\$s/H:\s*Handlers=\S\+\s*\(\S\+\).*/\1/p" "$INPUT_DEVICES" | sed -n '1p')
+
+    insert_block "${XORG_CONF}" '$' "\
+Section \"InputDevice\"
+  Identifier  \"UvpMouseEvent\"
+  Driver      \"evdev\"
+  Option      \"Device\" \"/dev/input/${usb_tablet_event}\"
+EndSection" #syntax highlight"
+
+    ### replace ServerLayout
+    server_layout_line=$(sed -n '/^\s*Section.*ServerLayout/=' "${XORG_CONF}" | sed -n '$p')
+    core_pointer_line=$(sed -n "${server_layout_line},/^\s*InputDevice.*CorePointer.*/=" "$XORG_CONF" | sed -n '$p')
+    comment_on_line "${XORG_CONF}" "${core_pointer_line}" ".*"
+    insert_block "${XORG_CONF}" "${core_pointer_line}" "  InputDevice  \"UvpMouseEvent\" \"CorePointer\""
+}
+
+RestoreXorg()
+{
+    remove_block "${XORG_CONF}"
+    comment_off_line "${XORG_CONF}"
+}
+
+OPT_ACTION='install'
+while getopts "u" option
+do
+    case $option in
+    u)
+        OPT_ACTION='uninstall'
+        ;;
+    *)
+        exit 1
+        ;;
+    esac
+done
+
+if [ "$OPT_ACTION" = 'install' -a -n "$(sed -n '/QEMU/p' ${INPUT_DEVICES})" ]
+then
+    ChangeXorg
+else
+    RestoreXorg
+fi

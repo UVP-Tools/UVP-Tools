@@ -1,0 +1,7 @@
+include $(M)/config.mk
+
+CFLAGS_accel.o	:= -include asm/hypervisor.h
+
+obj-m  = xen-vnif.o
+xen-vnif-objs	:= netfront.o
+xen-vnif-objs	+= accel.o

@@ -1,0 +1,27 @@
+#!/bin/bash
+
+ETHDEV=$(ls /sys/class/net/) 
+
+for j in $(seq 1 3)
+do
+	for i in $ETHDEV 
+	do
+		for IP in $(/sbin/ip addr show $i | awk '/inet /{split($2,x,"/");print x[1]}')
+		do
+			if [ ! -z $IP ]
+			then		
+				/etc/.uvp-monitor/arping -U -c 1 -I $i $IP >/dev/null
+				/etc/.uvp-monitor/arping -A -c 1 -I $i $IP >/dev/null
+			fi
+		done
+		for IP in $(/sbin/ip addr show $i | awk '/inet6 /{split($2,x,"/");print x[1]}')
+		do
+			if [ ! -z $IP ]
+			then			
+				/etc/.uvp-monitor/ndsend $IP $i >/dev/null
+			fi
+		done
+	done
+	sleep 0.5
+done
+

@@ -1,0 +1,109 @@
+#!/bin/bash
+CPUARCH=''
+UVPTOOLSPATH=`pwd`
+SYS_TYPE=''
+INSTALLER_DIR=${UVPTOOLSPATH}
+KERLIBMOD=''
+VMTOOLRVFPATH=''
+LCL_UVP_MODULES_PATH=''
+
+
+get_linux_cpu_arch()
+{
+	if [ ! -f "/sbin/depmod" ]
+	then
+		echo "Can not determine linux cpu arch."
+		exit 1
+	fi
+
+	if [ -n "$(file /sbin/depmod | grep "64-bit")" -o -n "$(file /bin/kmod | grep "64-bit")" ]
+	then
+		CPUARCH="x86_64"
+	elif [ -n "$(file /sbin/depmod | grep "32-bit")"  -o -n "$(file /bin/kmod | grep "32-bit")" ]
+	then
+		CPUARCH="i686"
+	else
+		echo "Can not determine linux cpu arch 32 or 64 bit."
+		exit 1
+	fi
+}
+
+get_linux_dist()
+{
+	issue='/etc/issue'
+	if [ -e '/etc/debian_version' -o -n "$(grep -i 'debian' $issue)" ]
+	then
+		SYS_TYPE='debian'
+	elif [ -e '/etc/redhat-release' -o -n "$(grep -i 'red *hat' $issue)" ]
+	then
+		SYS_TYPE='redhat'
+	elif [ -e '/etc/SuSE-release' -o -n "$(grep -i 'suse\|s\.u\.s\.e' $issue)" ]
+	then
+		SYS_TYPE='suse'
+	else
+		echo "cannot determine linux distribution"
+		exit 1
+	fi
+}
+
+
+match_patchkernel_version()
+{
+	KERN_RELEASE=$1
+	get_uvp_kernel_modules_bin="${INSTALLER_DIR}/bin/offline/offline_get_uvp_kernel_modules"
+	LCL_UVP_MODULES_PATH=$(${get_uvp_kernel_modules_bin} "$SYS_TYPE" "$KERN_RELEASE" "$CPUARCH")
+	echo $LCL_UVP_MODULES_PATH
+}
+
+kernel_libmodule_path()
+{
+	kernelversion=$1
+	KERLIBMOD="/lib/modules/$kernelversion/updates/pvdriver"
+	if [ ! -d ${KERLIBMOD} ];then
+		mkdir -p ${KERLIBMOD}
+	fi
+}
+
+copy_xvf_module()
+{
+	UvptoolsModuleRvfPath=$1
+	UVPTOOLRVFPATH="${INSTALLER_DIR}/lib/modules/$UvptoolsModuleRvfPath"
+	echo $UVPTOOLRVFPATH
+	if [ -d "${UVPTOOLRVFPATH}" ];then
+		cp -rf $UVPTOOLRVFPATH/* $KERLIBMOD
+	else
+		echo "Unsupported Linux Version."
+		exit 1
+	fi
+}
+
+find_module()
+{
+	get_linux_cpu_arch
+	get_linux_dist
+
+	for kernelversion in `ls /lib/modules/`
+	do
+		illegal_kern="`echo ${kernelversion} | awk -F"." '{print $1}'`"
+		if [ "${illegal_kern}" = ^[0-9] ];then
+			echo "illegal kernel"
+			continue
+		fi
+
+		match_patchkernel_version ${kernelversion}
+		VmtoolsModuleRvfPath="${LCL_UVP_MODULES_PATH}"
+		echo $VmtoolsModuleRvfPath
+
+		kernel_libmodule_path ${kernelversion}
+
+		copy_xvf_module ${LCL_UVP_MODULES_PATH}
+
+		for mod in $(find $KERLIBMOD -type f -name "*.ko")
+		do
+			echo $mod
+		done
+
+	done
+}
+
+find_module

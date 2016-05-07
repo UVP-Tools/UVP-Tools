@@ -1,0 +1,53 @@
+diff -ruNa uvp-classic_xen_driver-3.12.xto3.16.x.orig/xen-platform-pci/machine_reboot.c uvp-classic_xen_driver-3.12.xto3.16.x/xen-platform-pci/machine_reboot.c
+--- uvp-classic_xen_driver-3.12.xto3.16.x.orig/xen-platform-pci/machine_reboot.c	2016-02-24 17:48:35.000000000 +0800
++++ uvp-classic_xen_driver-3.12.xto3.16.x/xen-platform-pci/machine_reboot.c	2016-02-24 17:48:58.000000000 +0800
+@@ -112,7 +112,6 @@
+ 
+ 	/* update uvp flags */
+ 	write_driver_resume_flag();
+-	write_feature_flag();
+ 	write_monitor_service_flag();
+ 
+ 	return 0;
+diff -ruNa uvp-classic_xen_driver-3.12.xto3.16.x.orig/xen-platform-pci/platform-pci.c uvp-classic_xen_driver-3.12.xto3.16.x/xen-platform-pci/platform-pci.c
+--- uvp-classic_xen_driver-3.12.xto3.16.x.orig/xen-platform-pci/platform-pci.c	2016-02-24 17:48:35.000000000 +0800
++++ uvp-classic_xen_driver-3.12.xto3.16.x/xen-platform-pci/platform-pci.c	2016-02-24 17:50:35.000000000 +0800
+@@ -74,19 +74,6 @@
+ static unsigned long shared_info_frame;
+ static uint64_t callback_via;
+ 
+-/*driver should write xenstore flag to tell xen which feature supported, add by w00205029 2012-01-17*/
+-void  write_feature_flag()
+-{
+-	int rc;
+-	char str[32] = {0};
+-	
+-	(void)snprintf(str, sizeof(str), "%d", SUPPORTED_FEATURE);
+-	rc = xenbus_write(XBT_NIL, "control/uvp", "feature_flag", str);
+-	if (rc) {
+-		printk(KERN_INFO DRV_NAME "write  control/uvp/feature_flag failed \n");
+-	}			
+-}
+-
+ /*2012-7-9 write monitor-service-flag is true*/
+ void  write_monitor_service_flag()
+ {
+@@ -464,7 +451,6 @@
+ 	if ((ret = xen_panic_handler_init()))
+ 		goto out;
+ 
+-	write_feature_flag();
+  out:
+ 	if (ret) {
+ 		pci_release_region(pdev, 0);
+diff -ruNa uvp-classic_xen_driver-3.12.xto3.16.x.orig/xen-platform-pci/platform-pci.h uvp-classic_xen_driver-3.12.xto3.16.x/xen-platform-pci/platform-pci.h
+--- uvp-classic_xen_driver-3.12.xto3.16.x.orig/xen-platform-pci/platform-pci.h	2016-02-24 17:48:35.000000000 +0800
++++ uvp-classic_xen_driver-3.12.xto3.16.x/xen-platform-pci/platform-pci.h	2016-02-24 17:49:16.000000000 +0800
+@@ -26,7 +26,6 @@
+ #define XENPAGING   0x1
+ #define SUPPORTED_FEATURE  XENPAGING
+ 
+-extern void  write_feature_flag(void);
+ extern void  write_monitor_service_flag(void);
+ extern void  write_driver_resume_flag(void);
+ unsigned long alloc_xen_mmio(unsigned long len);

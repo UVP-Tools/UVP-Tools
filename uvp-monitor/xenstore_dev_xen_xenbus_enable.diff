@@ -1,0 +1,294 @@
+diff -uraN xen-4.1.2.orig/tools/xenstore/Makefile xen-4.1.2/tools/xenstore/Makefile
+--- xen-4.1.2.orig/tools/xenstore/Makefile	2011-10-21 01:05:46.000000000 +0800
++++ xen-4.1.2/tools/xenstore/Makefile	2016-05-05 11:14:42.000000000 +0800
+@@ -1,117 +1,17 @@
+-XEN_ROOT=$(CURDIR)/../..
+-include $(XEN_ROOT)/tools/Rules.mk
++all:
++	gcc  -O2 -fomit-frame-pointer -m64 -fno-strict-aliasing -std=gnu99 -Wall -Wstrict-prototypes -falign-functions=32 -Wno-unused-value -Wdeclaration-after-statement  -D__XEN_TOOLS__ -MMD -MF .xenstore_client.o.d  -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE  -Werror -g -O0 -I.  -c -o xenstore_client.o xenstore_client.c
++	gcc  -DPIC -O2 -fomit-frame-pointer -m64 -fno-strict-aliasing -std=gnu99 -Wall -Wstrict-prototypes -falign-functions=32 -Wno-unused-value -Wdeclaration-after-statement  -D__XEN_TOOLS__ -MMD -MF .xs.opic.d  -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE  -Werror -g -O0 -I.  -DUSE_PTHREAD -fPIC -c -o xs.opic xs.c
++	gcc  -DPIC -O2 -fomit-frame-pointer -m64 -fno-strict-aliasing -std=gnu99 -Wall -Wstrict-prototypes -falign-functions=32 -Wno-unused-value -Wdeclaration-after-statement  -D__XEN_TOOLS__ -MMD -MF .xs_lib.opic.d  -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE  -Werror -g -O0 -I.  -fPIC -c -o xs_lib.opic xs_lib.c
++	gcc -O2 -fomit-frame-pointer -m64 -fno-strict-aliasing -std=gnu99 -Wall -Wstrict-prototypes -falign-functions=32 -Wno-unused-value -Wdeclaration-after-statement  -D__XEN_TOOLS__ -MMD -MF .libxenstore.so.3.0.0.d  -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE  -Werror -g -O0 -I.     -Wl,--no-as-needed -Wl,-soname -Wl,libxenstore.so.3.0 -shared -o libxenstore.so.3.0.0 xs.opic xs_lib.opic  -lpthread
++	ln -sf libxenstore.so.3.0.0 libxenstore.so.3.0
++	ln -sf libxenstore.so.3.0 libxenstore.so
++	gcc -O2 -fomit-frame-pointer -m64 -fno-strict-aliasing -std=gnu99 -Wall -Wstrict-prototypes -falign-functions=32 -Wno-unused-value -Wdeclaration-after-statement  -D__XEN_TOOLS__ -MMD -MF .xenstore.d  -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE  -Werror -g -O0 -I.     -Wl,--no-as-needed xenstore_client.o -L. -lxenstore  -o xenstore
++	gcc  -O2 -fomit-frame-pointer -m64 -fno-strict-aliasing -std=gnu99 -Wall -Wstrict-prototypes -falign-functions=32 -Wno-unused-value -Wdeclaration-after-statement  -D__XEN_TOOLS__ -MMD -MF .xenstore_control.o.d  -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE  -Werror -g -O0 -I.  -c -o xenstore_control.o xenstore_control.c
++	gcc -O2 -fomit-frame-pointer -m64 -fno-strict-aliasing -std=gnu99 -Wall -Wstrict-prototypes -falign-functions=32 -Wno-unused-value -Wdeclaration-after-statement  -D__XEN_TOOLS__ -MMD -MF .xenstore-control.d  -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE  -Werror -g -O0 -I.     -Wl,--no-as-needed xenstore_control.o -L. -lxenstore  -o xenstore-control
+ 
+-MAJOR = 3.0
+-MINOR = 0
+-
+-CFLAGS += -Werror
+-CFLAGS += -I.
+-CFLAGS += $(CFLAGS_libxenctrl)
+-
+-CLIENTS := xenstore-exists xenstore-list xenstore-read xenstore-rm xenstore-chmod
+-CLIENTS += xenstore-write xenstore-ls xenstore-watch
+-
+-XENSTORED_OBJS = xenstored_core.o xenstored_watch.o xenstored_domain.o xenstored_transaction.o xs_lib.o talloc.o utils.o tdb.o hashtable.o
+-
+-XENSTORED_OBJS_$(CONFIG_Linux) = xenstored_linux.o
+-XENSTORED_OBJS_$(CONFIG_SunOS) = xenstored_solaris.o xenstored_probes.o
+-XENSTORED_OBJS_$(CONFIG_NetBSD) = xenstored_netbsd.o
+-
+-XENSTORED_OBJS += $(XENSTORED_OBJS_y)
+-
+-ifneq ($(XENSTORE_STATIC_CLIENTS),y)
+-LIBXENSTORE := libxenstore.so
+-else
+-LIBXENSTORE := libxenstore.a
+-xenstore xenstore-control: CFLAGS += -static
+-endif
+-
+-ALL_TARGETS = libxenstore.so libxenstore.a clients xs_tdb_dump xenstored
+-
+-.PHONY: all
+-all: $(ALL_TARGETS)
+-
+-.PHONY: clients
+-clients: xenstore $(CLIENTS) xenstore-control
+-
+-ifeq ($(CONFIG_SunOS),y)
+-xenstored_probes.h: xenstored_probes.d
+-	dtrace -C -h -s xenstored_probes.d
+-
+-xenstored_solaris.o: xenstored_probes.h
+-
+-xenstored_probes.o: xenstored_solaris.o
+-	dtrace -C -G -s xenstored_probes.d xenstored_solaris.o 
+-
+-CFLAGS += -DHAVE_DTRACE=1
+-endif
+- 
+-xenstored: $(XENSTORED_OBJS)
+-	$(CC) $(CFLAGS) $(LDFLAGS) $^ $(LDLIBS_libxenctrl) $(SOCKET_LIBS) -o $@
+-
+-$(CLIENTS): xenstore
+-	ln -f xenstore $@
+-
+-xenstore: xenstore_client.o $(LIBXENSTORE)
+-	$(CC) $(CFLAGS) $(LDFLAGS) $< -L. -lxenstore $(SOCKET_LIBS) -o $@
+-
+-xenstore-control: xenstore_control.o $(LIBXENSTORE)
+-	$(CC) $(CFLAGS) $(LDFLAGS) $< -L. -lxenstore $(SOCKET_LIBS) -o $@
+-
+-xs_tdb_dump: xs_tdb_dump.o utils.o tdb.o talloc.o
+-	$(CC) $(CFLAGS) $(LDFLAGS) $^ -o $@
+-
+-libxenstore.so: libxenstore.so.$(MAJOR)
+-	ln -sf $< $@
+-libxenstore.so.$(MAJOR): libxenstore.so.$(MAJOR).$(MINOR)
+-	ln -sf $< $@
+-
+-xs.opic: CFLAGS += -DUSE_PTHREAD
+-
+-libxenstore.so.$(MAJOR).$(MINOR): xs.opic xs_lib.opic
+-	$(CC) $(CFLAGS) $(LDFLAGS) -Wl,$(SONAME_LDFLAG) -Wl,libxenstore.so.$(MAJOR) $(SHLIB_LDFLAGS) -o $@ $^ $(SOCKET_LIBS) -lpthread
+-
+-libxenstore.a: xs.o xs_lib.o
+-	$(AR) rcs $@ $^
+-
+-.PHONY: clean
+ clean:
+ 	rm -f *.a *.o *.opic *.so* xenstored_probes.h
+ 	rm -f xenstored xs_random xs_stress xs_crashme
+ 	rm -f xs_tdb_dump xenstore-control
+-	rm -f xenstore $(CLIENTS)
+-	$(RM) $(DEPS)
+-
+-.PHONY: TAGS
+-TAGS:
+-	etags `find . -name '*.[ch]'`
+-
+-.PHONY: tarball
+-tarball: clean
+-	cd .. && tar -c -j -v -h -f xenstore.tar.bz2 xenstore/
+-
+-.PHONY: install
+-install: all
+-	$(INSTALL_DIR) $(DESTDIR)$(BINDIR)
+-	$(INSTALL_DIR) $(DESTDIR)$(SBINDIR)
+-	$(INSTALL_DIR) $(DESTDIR)$(INCLUDEDIR)
+-	$(INSTALL_DIR) $(DESTDIR)/var/run/xenstored
+-	$(INSTALL_DIR) $(DESTDIR)/var/lib/xenstored
+-	$(INSTALL_PROG) xenstored $(DESTDIR)$(SBINDIR)
+-	$(INSTALL_PROG) xenstore-control $(DESTDIR)$(BINDIR)
+-	$(INSTALL_PROG) xenstore $(DESTDIR)$(BINDIR)
+-	set -e ; for c in $(CLIENTS) ; do \
+-		ln -f $(DESTDIR)$(BINDIR)/xenstore $(DESTDIR)$(BINDIR)/$${c} ; \
+-	done
+-	$(INSTALL_DIR) $(DESTDIR)$(LIBDIR)
+-	$(INSTALL_PROG) libxenstore.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)
+-	ln -sf libxenstore.so.$(MAJOR).$(MINOR) $(DESTDIR)$(LIBDIR)/libxenstore.so.$(MAJOR)
+-	ln -sf libxenstore.so.$(MAJOR) $(DESTDIR)$(LIBDIR)/libxenstore.so
+-	$(INSTALL_DATA) libxenstore.a $(DESTDIR)$(LIBDIR)
+-	$(INSTALL_DATA) xs.h $(DESTDIR)$(INCLUDEDIR)
+-	$(INSTALL_DATA) xs_lib.h $(DESTDIR)$(INCLUDEDIR)
+-
+--include $(DEPS)
+-
+-# never delete any intermediate files.
+-.SECONDARY:
++	rm -f xenstore xenstore-exists xenstore-list xenstore-read xenstore-rm xenstore-chmod xenstore-write xenstore-ls xenstore-watch
++	rm -f .*.d
+diff -uraN xen-4.1.2.orig/tools/xenstore/xs_lib.c xen-4.1.2/tools/xenstore/xs_lib.c
+--- xen-4.1.2.orig/tools/xenstore/xs_lib.c	2011-10-21 01:05:46.000000000 +0800
++++ xen-4.1.2/tools/xenstore/xs_lib.c	2016-05-05 11:19:35.000000000 +0800
+@@ -81,6 +81,8 @@
+ 		return s;
+ 
+ #if defined(__linux__)
++	if (access("/dev/xen/xenbus", F_OK) == 0)
++		return "/dev/xen/xenbus";
+ 	return "/proc/xen/xenbus";
+ #elif defined(__NetBSD__)
+ 	return "/kern/xen/xenbus";
+diff -uraN xen-4.1.2.orig/tools/xenstore/xs_lib.h xen-4.1.2/tools/xenstore/xs_lib.h
+--- xen-4.1.2.orig/tools/xenstore/xs_lib.h	2011-10-21 01:05:46.000000000 +0800
++++ xen-4.1.2/tools/xenstore/xs_lib.h	2016-05-05 11:14:42.000000000 +0800
+@@ -24,7 +24,7 @@
+ #include <limits.h>
+ #include <errno.h>
+ #include <stdint.h>
+-#include <xen/io/xs_wire.h>
++#include "xs_wire.h"
+ 
+ /* Bitmask of permissions. */
+ enum xs_perm_type {
+diff -uraN xen-4.1.2.orig/tools/xenstore/xs_wire.h xen-4.1.2/tools/xenstore/xs_wire.h
+--- xen-4.1.2.orig/tools/xenstore/xs_wire.h	1970-01-01 08:00:00.000000000 +0800
++++ xen-4.1.2/tools/xenstore/xs_wire.h	2016-05-05 11:14:42.000000000 +0800
+@@ -0,0 +1,133 @@
++/*
++ * Details of the "wire" protocol between Xen Store Daemon and client
++ * library or guest kernel.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining a copy
++ * of this software and associated documentation files (the "Software"), to
++ * deal in the Software without restriction, including without limitation the
++ * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
++ * sell copies of the Software, and to permit persons to whom the Software is
++ * furnished to do so, subject to the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included in
++ * all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++ * DEALINGS IN THE SOFTWARE.
++ *
++ * Copyright (C) 2005 Rusty Russell IBM Corporation
++ */
++
++#ifndef _XS_WIRE_H
++#define _XS_WIRE_H
++
++enum xsd_sockmsg_type
++{
++    XS_DEBUG,
++    XS_DIRECTORY,
++    XS_READ,
++    XS_GET_PERMS,
++    XS_WATCH,
++    XS_UNWATCH,
++    XS_TRANSACTION_START,
++    XS_TRANSACTION_END,
++    XS_INTRODUCE,
++    XS_RELEASE,
++    XS_GET_DOMAIN_PATH,
++    XS_WRITE,
++    XS_MKDIR,
++    XS_RM,
++    XS_SET_PERMS,
++    XS_WATCH_EVENT,
++    XS_ERROR,
++    XS_IS_DOMAIN_INTRODUCED,
++    XS_RESUME,
++    XS_SET_TARGET,
++    XS_RESTRICT
++};
++
++#define XS_WRITE_NONE "NONE"
++#define XS_WRITE_CREATE "CREATE"
++#define XS_WRITE_CREATE_EXCL "CREATE|EXCL"
++
++/* We hand errors as strings, for portability. */
++struct xsd_errors
++{
++    int errnum;
++    const char *errstring;
++};
++#ifdef EINVAL
++#define XSD_ERROR(x) { x, #x }
++/* LINTED: static unused */
++static struct xsd_errors xsd_errors[]
++#if defined(__GNUC__)
++__attribute__((unused))
++#endif
++    = {
++    XSD_ERROR(EINVAL),
++    XSD_ERROR(EACCES),
++    XSD_ERROR(EEXIST),
++    XSD_ERROR(EISDIR),
++    XSD_ERROR(ENOENT),
++    XSD_ERROR(ENOMEM),
++    XSD_ERROR(ENOSPC),
++    XSD_ERROR(EIO),
++    XSD_ERROR(ENOTEMPTY),
++    XSD_ERROR(ENOSYS),
++    XSD_ERROR(EROFS),
++    XSD_ERROR(EBUSY),
++    XSD_ERROR(EAGAIN),
++    XSD_ERROR(EISCONN)
++};
++#endif
++
++struct xsd_sockmsg
++{
++    uint32_t type;  /* XS_??? */
++    uint32_t req_id;/* Request identifier, echoed in daemon's response.  */
++    uint32_t tx_id; /* Transaction id (0 if not related to a transaction). */
++    uint32_t len;   /* Length of data following this. */
++
++    /* Generally followed by nul-terminated string(s). */
++};
++
++enum xs_watch_type
++{
++    XS_WATCH_PATH = 0,
++    XS_WATCH_TOKEN
++};
++
++/* Inter-domain shared memory communications. */
++#define XENSTORE_RING_SIZE 1024
++typedef uint32_t XENSTORE_RING_IDX;
++#define MASK_XENSTORE_IDX(idx) ((idx) & (XENSTORE_RING_SIZE-1))
++struct xenstore_domain_interface {
++    char req[XENSTORE_RING_SIZE]; /* Requests to xenstore daemon. */
++    char rsp[XENSTORE_RING_SIZE]; /* Replies and async watch events. */
++    XENSTORE_RING_IDX req_cons, req_prod;
++    XENSTORE_RING_IDX rsp_cons, rsp_prod;
++};
++
++/* Violating this is very bad.  See docs/misc/xenstore.txt. */
++#define XENSTORE_PAYLOAD_MAX 4096
++
++/* Violating these just gets you an error back */
++#define XENSTORE_ABS_PATH_MAX 3072
++#define XENSTORE_REL_PATH_MAX 2048
++
++#endif /* _XS_WIRE_H */
++
++/*
++ * Local variables:
++ * mode: C
++ * c-set-style: "BSD"
++ * c-basic-offset: 4
++ * tab-width: 4
++ * indent-tabs-mode: nil
++ * End:
++ */

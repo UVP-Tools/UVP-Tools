@@ -1,0 +1,6 @@
+include $(M)/config.mk
+
+obj-m = xen-balloon.o
+
+xen-balloon-objs := balloon.o
+xen-balloon-objs += sysfs.o

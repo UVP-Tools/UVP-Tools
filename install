@@ -1,0 +1,3402 @@
+#!/bin/bash
+###############################################################################
+# History: 2012-5-5:
+#     install kernel modules and services for pvdriver
+###############################################################################
+#cut   don't change the next two lines. when build file "install" for each OS distributation,
+#cut   this line will be changed by the command " sed "/^DESCRIPTION=/s/.*/&${dscrpt} "
+#cut   means this line will be cut when build the install file
+DESCRIPTION=
+
+shopt -u expand_aliases
+
+### ubuntu14.04.3 and debian8.2 and Fedora22/23 no procfs
+NO_PROCFS="false"
+if [ -n "`uname -r | grep "4.2.3-300\|3.16.0-4-amd64\|3.19.0-25-generic\|4.0.4-301"`" -a -e "/dev/xen/xenbus" ]
+then
+    NO_PROCFS="true"
+fi
+
+### debug switch(log/all)
+# log: output log to stdout
+# all: output log and execution detail to stdout
+DEBUG_SCRIPT=''
+
+###############################################################################
+### installation configuration
+###############################################################################
+PACKAGE_NAME='PV Driver for Linux'
+PACKAGE='pvdriver'
+
+INSTALL_PATH="/etc/.uvp-monitor"
+WORKDIR="/tmp/$PACKAGE-$INSTALL_VERSION-$$"
+
+### package
+INSTALLER_DIR=$(cd "$(dirname "$0")" && pwd)
+INSTALLER=$(basename "$0")
+
+UNINSTALLER_DIR="$INSTALL_PATH"
+UNINSTALLER="uninstall"
+
+UPGRADE_VERSION="/etc/.tools_upgrade/pvdriver_version.ini"
+LAST_VERSION="/var/run/tools_upgrade/pvdriver_version.ini"
+
+### 0;chang the menu.lst;
+kernel_param_flag="0"
+## free boot disk size need 25M 
+BOOT_FREE_SPACE=25600
+## the common compression ratio of initrd is 2.5, we set the ratio to 3
+INITRD_RATIO=3
+
+###############################################################################
+### hide suspend/hibernate
+###############################################################################
+SUSPEND_PATH="/usr/sbin/pm-suspend"
+HIBERNATE_PATH="/usr/sbin/pm-hibernate"
+
+###############################################################################
+# environment
+###############################################################################
+PATH="${INSTALLER_DIR}/bin:/bin:/sbin:/usr/bin:/usr/sbin:$PATH" ; export PATH
+
+BALLOONMOD=''
+HCALLMOD=''
+VMDQMOD=''
+SCSIMOD=''
+###############################################################################
+### error definition
+###############################################################################
+ERR_OK=0
+ERR_NG=1
+UVPMONITOR_OK=3
+ERR_CANCEL=11
+ERR_INITRD=12
+ERR_ABORT=12
+ERR_VERSION=14
+ERR_TIMEOUT=16
+ERR_FILE_NOEXIST=20
+
+###############################################################################
+### debug
+###############################################################################
+###
+Info='eval 2>&1 logger "[pvdriver-$INSTALLER:$FUNCNAME:$LINENO]"'
+
+if [ -n "$DEBUG_SCRIPT" -a -z "$DEBUG_INSTALL" ]
+then
+    export DEBUG_INSTALL=$DEBUG_SCRIPT
+fi
+
+if [ -n "$DEBUG_INSTALL" ]
+then
+    Info='eval 2>&1 echo -e "\033[32;49;1m[$INSTALLER:$FUNCNAME:$LINENO]\033[39;49;0m"'
+    WAIT=" [waiting] ; read"
+    test "$DEBUG_INSTALL" = "all" && set -x
+fi
+
+###############################################################################
+# Common functions
+###############################################################################
+## remove line from a file
+remove_block_line_by_line()
+{
+    file_path=$1
+    line_names=$2
+    eval line_name_arr=($(echo \"${line_names//:/\" \"}\"))
+    for line_name in "${line_name_arr[@]}"
+    do
+        exist_line=`egrep -wn "${line_name}" "${file_path}" | head -1 | cut -d":" -f 1`
+        if [ -n "$exist_line" ]
+        then
+            sed -i "${exist_line}d" "${file_path}" > /dev/null 2>&1
+        fi
+    done
+}
+
+###############################################################################
+# Common functions
+###############################################################################
+## kill all processes
+kill_proc()
+{
+    local proc_name=$1
+
+    killall -TERM $proc_name > /dev/null 2>&1
+
+    for ((i=0; i<3; ++i))
+    do
+        if [ -n "$(pidof $proc_name 2>/dev/null)" ]
+        then
+            killall -TERM $proc_name > /dev/null 2>&1
+            sleep 1
+        else
+            break
+        fi
+    done
+
+    if [ -n "$(pidof $proc_name 2>/dev/null)" ]
+    then
+        warn "kill process $proc_name failed"
+        return 1
+    else
+        return 0
+    fi
+}
+
+## compare version
+# version1 = version1 : return 0
+# version1 < version1 : return 1
+# version1 > version1 : return 2
+compare_version()
+{
+    local version1="$1"
+    local version2="$2"
+
+    for ((num=1; num<=100; num++))
+    do
+        num1=$(echo -n "$version1" | sed 's;[-.]; ;g' | awk "{print \$$num}" | sed 's;[^0-9];;g')
+        num2=$(echo -n "$version2" | sed 's;[-.]; ;g' | awk "{print \$$num}" | sed 's;[^0-9];;g')
+
+        if [ -z "$num1" -a -z "$num2" ]
+        then
+            return 0
+        elif [ -z "$num1" ] || ([ -n "$num2" ] && [ $num1 -lt $num2 ])
+        then
+            return 1
+        elif [ -z "$num2" ] || ([ -n "$num1" ] && [ $num1 -gt $num2 ])
+        then
+            return 2
+        else
+            continue
+        fi
+    done
+}
+
+## get binary path
+none_binary()
+{
+    return $ERR_FILE_NOEXIST
+}
+which_binary()
+{
+    local binary=$1;
+
+    local bin_path=''
+    if [ -z "${binary%%/*}" ]
+    then
+        if [ -f "$binary" -a -x "$binary" ]
+        then
+            bin_path="$binary"
+        fi
+    else
+        eval path_array=($(echo \"${PATH//:/\" \"}\"))
+
+        for path in "${path_array[@]}"
+        do
+            if [ -f "$path/$binary" -a -x "$path/$binary" ]
+            then
+                bin_path="$path/$binary"
+                break
+            fi
+        done
+    fi
+
+    if [ -n "$bin_path" ]
+    then
+        echo "$bin_path"
+        return 0
+    else
+        echo 'none_binary'
+        return 1
+    fi
+}
+
+uniform_string()
+{
+    local input_string=$1
+    local output_string=''
+    for word in $input_string
+    do
+        local word_regex=$(echo "${word//\//\\/}" | sed 's;\.;\\.;g')
+        if [ -n "$(echo "$output_string" | sed -n '/\(^\|\s\)'"${word_regex}"'\(\s\|$\)/p')" ]
+    then
+        continue
+    fi
+        output_string="$output_string $word"
+    done
+    echo "$output_string"
+}
+
+###############################################################################
+# Config File Editor
+###############################################################################
+### modification operations
+MARKER_BEGIN='###pvdriver<begin>'
+MARKER_END='###pvdriver<end>'
+MARKER_COMMENT='###pvdriver#'
+MARKER_WARNING=' do not change this comment'
+check_block()
+{
+    object_file=$1
+
+    if [ "$INSTALL_ACTION" = "uninstall" ]
+    then
+        test ! -f "$INSTALL_PATH/version.ini" && return 0
+    fi
+
+    test ! -f "$object_file" && return 0
+
+    if [ -z "`cat $object_file | grep -w $MARKER_BEGIN`" -a -n  "`cat $object_file | grep -w $MARKER_END`" ]
+    then
+        comment_line_num=`grep -wn "${MARKER_END}" "${object_file}" | head -1 | cut -d":" -f 1`
+        comment_line_num=$((comment_line_num-1))
+        sed -i "$comment_line_num i${MARKER_BEGIN}${MARKER_WARNING}" "$object_file"
+    fi
+
+    if [ -n "`cat $object_file | grep -w $MARKER_BEGIN`" -a -z  "`cat $object_file | grep -w $MARKER_END`" ]
+    then
+        comment_line_num=`grep -wn "${MARKER_BEGIN}" "${object_file}" | head -1 | cut -d":" -f 1`
+        comment_line_num=$((comment_line_num+1))
+        sed -i "$comment_line_num a${MARKER_END}${MARKER_WARNING}" "$object_file"
+    fi
+}
+
+insert_block()
+{
+    object_file=$1
+    anchor_address=$2
+    block_text=$3
+
+    test ! -f "$object_file" && return 2
+    sed_cmd='a'
+    ###
+    if [ -z "${anchor_address}" ]
+    then
+        abort "insert_block anchor_address=${anchor_address}."
+    elif [ "${anchor_address}" = '0' ]
+    then
+        anchor_address=1
+        sed_cmd='i'
+    elif [ -z "$(echo "${anchor_address}" | sed -n '/^\s*\([0-9]\+\|\$\)\s*$/p')" ]
+    then
+        anchor_address=$(echo "${anchor_address}" | sed 's/\//\\\//g')
+        anchor_address="/${anchor_address}/"
+    fi
+
+    ###
+    if [ -s "$object_file" ]
+    then
+        sed -i "${anchor_address}${sed_cmd}\
+${MARKER_BEGIN}${MARKER_WARNING}\n\
+$(echo "$block_text" | sed ':a;N;s/\n/\\n/;ta')\n\
+${MARKER_END}${MARKER_WARNING}" "$object_file"
+    else
+        cat > "$object_file" << EOF
+${MARKER_BEGIN}${MARKER_WARNING}
+$block_text
+${MARKER_END}${MARKER_WARNING}
+EOF
+    fi
+    ret=$?
+
+    if [ $ret = 0 ]
+    then
+        return $ret
+    else
+        abort "insert_block $object_file with ${anchor_address} failed."
+    fi
+}
+
+remove_block()
+{
+    object_file=$1
+
+    test ! -f "$object_file" && return 2
+
+    while :; do
+        marker_begin_line=$(grep -n "${MARKER_BEGIN}.*" "${object_file}" | sed -n '1p' | awk -F ':' '{print $1}')
+        marker_end_line=$(grep -n "${MARKER_END}.*" "${object_file}" | sed -n '1p' | awk -F ':' '{print $1}')
+        [ -z "${marker_begin_line}" -a -z "${marker_end_line}" ] && break
+
+        if [ -z "${marker_begin_line}" -o -z "${marker_end_line}" ] || [ ${marker_begin_line} -gt ${marker_end_line} ]
+        then
+            abort "remove_block $object_file format failed."
+        fi
+
+        if ! sed -i "${marker_begin_line},${marker_end_line}d" "${object_file}"
+        then
+            abort "remove_block $object_file failed."
+        fi
+    done
+}
+
+insert_word()
+{
+    object_file=$1
+    anchor_expreg=$2
+    word_text=$3
+
+    test ! -f "$object_file" && return 2
+
+    if [ -z "${anchor_expreg}" ]
+    then
+        abort "insert_word anchor_expreg=${anchor_expreg}."
+    fi
+
+    ###
+    anchor_expreg=$(echo "${anchor_expreg}" | sed 's/\//\\\//g')
+    if ! sed -i "s;\(${anchor_expreg}\);\1 ${word_text};g" "$object_file"
+    then
+        abort "insert_word $object_file at ${anchor_expreg} failed."
+    fi
+}
+
+remove_word()
+{
+    object_file=$1
+    anchor_expreg=$2
+    word_text=$3
+
+    test ! -f "$object_file" && return 2
+
+    ###
+    anchor_expreg=$(echo "${anchor_expreg}" | sed 's/\//\\\//g')
+    if ! sed -i "s;\(${anchor_expreg}\).* ${word_text};\1;g" "$object_file"
+    then
+        abort "remove_word $object_file at ${anchor_expreg} failed."
+    fi
+}
+
+replace_word()
+{
+    object_file=$1
+    anchor_expreg=$2
+    word_text1=$3
+    word_text2=$4
+
+    test ! -f "$object_file" && return 2
+
+    ###
+    if [ -z "${anchor_expreg}" ]
+    then
+        abort "replace_word anchor_expreg=${anchor_expreg}."
+    elif [ -z "$(echo "${anchor_expreg}" | sed -n '/^\s*\([0-9]\+\|\$\)\(,\([0-9]\+\|\$\)\)\{0,1\}\s*$/p')" ]
+    then
+        anchor_expreg=$(echo "${anchor_expreg}" | sed 's/\//\\\//g')
+        anchor_expreg="/${anchor_expreg}/"
+    fi
+
+    ###
+    anchor_expreg=$(echo "${anchor_expreg}" | sed 's/\//\\\//g')
+    if ! sed -i "${anchor_expreg}s;${word_text1};${word_text2};g" "$object_file"
+    then
+        abort "replace_word $object_file at ${anchor_expreg} failed."
+    fi
+}
+
+comment_on_line()
+{
+    object_file=$1
+    anchor_address=$2
+    anchor_expreg=$3
+
+    test ! -f "$object_file" && return 2
+
+    ###
+    if [ -z "${anchor_address}" ]
+    then
+        abort "comment_on_line anchor_address=${anchor_address}."
+    elif [ -z "$(echo "${anchor_address}" | sed -n '/^\s*\([0-9]\+\|\$\)\(,\([0-9]\+\|\$\)\)\{0,1\}\s*$/p')" ]
+    then
+        anchor_address=$(echo "${anchor_address}" | sed 's/\//\\\//g')
+        anchor_address="/${anchor_address}/"
+    fi
+
+    ###
+    anchor_expreg=$(echo "${anchor_expreg}" | sed 's/\//\\\//g')
+    if ! sed -i "${anchor_address}s;\(${anchor_expreg}.*\);${MARKER_COMMENT}\1;g" "$object_file"
+    then
+        abort "comment_on_line $object_file at ${anchor_expreg} failed."
+    fi
+}
+
+comment_off_line()
+{
+    object_file=$1
+
+    test ! -f "$object_file" && return 2
+
+    ###
+    if ! sed -i '1,$'"s;\(^\s*\)${MARKER_COMMENT}\(.*\);\1\2;g" "$object_file"
+    then
+        abort "comment_off_line $object_file at ${anchor_expreg} failed."
+    fi
+}
+
+###############################################################################
+# check version of pvdriver and linux
+###############################################################################
+SYS_TYPE=""   #debian,gentoo,redhat,suse,lfs,pardus,bsd
+INIT_TYPE=""  #sysv,lfs,pardus,bsd
+KERN_RELEASE=""
+CPU_ARCH=""   #x86,x86_64
+LIB_PATH=""
+
+check_root()
+{
+    # check root privilege
+    if [ $(id -u) = 0 ]
+    then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# get type of unix-like system
+check_dist()
+{
+    local issue
+
+    # singleton execution
+    if [ -n "$SYS_TYPE" ]
+    then
+        $Info "check_dist already called before"
+        return $ERR_OK
+    fi
+
+    ### determine linux distribution
+    issue='/etc/issue'
+    if [ -e '/etc/debian_version' -o -n "$(grep -i 'debian' $issue)" ]
+    then
+        SYS_TYPE='debian'
+        KERN_RELEASE="$(uname -r)"
+        CPU_ARCH="$(uname -m)"
+        INIT_TYPE='sysv'
+        PIDPATH='/var/run'
+        RC_SYSINIT='/etc/init.d/rc.local'
+    elif [ -e '/etc/redhat-release' -o -n "$(grep -i 'red *hat' $issue)" -o -n "$(grep -i 'GreatTurbo' $issue)" ]
+    then
+        SYS_TYPE='redhat'
+        KERN_RELEASE="$(uname -r)"
+        CPU_ARCH="$(uname -m)"
+        INIT_TYPE='sysv'
+        PIDPATH='/var/lock/subsys'
+        if [ -n "`uname -r | grep "3.10.0"`" ];then
+            RC_SYSINIT='/etc/rc.d/rc.local'
+        else
+            RC_SYSINIT='/etc/rc.d/rc.sysinit'
+        fi
+    elif [ -e '/etc/SuSE-release' -o -n "$(grep -i 'suse\|s\.u\.s\.e' $issue)" ]
+    then
+        SYS_TYPE='suse'
+        KERN_RELEASE="$(uname -r)"
+        CPU_ARCH="$(uname -m)"
+        INIT_TYPE='sysv'
+        PIDPATH='/var/run'
+        RC_SYSINIT='/etc/init.d/boot.local'
+    elif [ -e '/etc/gentoo-release' ]
+    then
+        SYS_TYPE='gentoo'
+        KERN_RELEASE="$(uname -r)"
+        CPU_ARCH="$(uname -m)"
+        INIT_TYPE='sysv'
+        PIDPATH='/var/run'
+        RC_SYSINIT=''
+    else
+        $Info "cannot determine linux distribution"
+        return $ERR_VERSION
+    fi
+
+    ### check architecture
+    LIB_PATH="/usr/lib"
+    case "$CPU_ARCH" in
+    i[3456789]86|x86)
+        CPU_ARCH="x86"
+        ;;
+    x86_64|amd64)
+        CPU_ARCH="x86_64"
+        test -d "/usr/lib64" && LIB_PATH="/usr/lib64"
+        ;;
+    *)
+        $Info "cannot determine processor type"
+        return $ERR_VERSION
+    esac
+
+    return $ERR_OK
+}
+
+DEP_CMDS_LIST=''
+DEP_PKGS_LIST=''
+check_tools()
+{
+    local do_query=$1
+    check_dist
+    ###
+    DEP_CMDS_LIST="basename dirname id mv rm rmdir uname lsmod rmmod depmod modprobe pidof xargs find tar sed grep awk logger"
+
+    case $SYS_TYPE in
+    suse)
+        pkg_query='rpm -qf'
+        initrd_tool='mkinitrd'
+        ;;
+    redhat)
+        pkg_query='rpm -qf'
+        if [ -f "/etc/dracut.conf" ]
+        then
+            initrd_tool='dracut'
+        else
+            initrd_tool='mkinitrd'
+        fi
+        ;;
+    debian)
+        pkg_query='dpkg -S'
+        initrd_tool='update-initramfs'
+        ;;
+    esac
+
+    DEP_CMDS_LIST="$DEP_CMDS_LIST $initrd_tool"
+
+    ###
+    DEP_PKGS_LIST=''
+    if [ "$do_query" = 'noquery' -o "$(which_binary $pkg_query)" = 'none_binary' ]
+    then
+        pkg_query=':'
+    fi
+
+    bin_need=''
+    for bin in $DEP_CMDS_LIST
+    do
+        bin_path=$(which_binary $bin)
+        if [ "$bin_path" = 'none_binary' ]
+        then
+            bin_need="$bin_need $bin"
+            pkg_info="no_package_found"
+            bin_path="$bin"
+        else
+            pkg_info="$($pkg_query $bin_path)"
+        fi
+
+        case "$pkg_query" in
+        rpm*)
+            DEP_PKGS_LIST="$DEP_PKGS_LIST
+$pkg_info: $bin_path"
+            ;;
+        dpkg*)
+            DEP_PKGS_LIST="$DEP_PKGS_LIST
+$pkg_info "
+            ;;
+        esac
+    done
+
+    ###
+    DEP_CMDS_LIST="$(echo "$DEP_CMDS_LIST" | sed '/^$/d')"
+    DEP_PKGS_LIST="$(echo "$DEP_PKGS_LIST" | sed '/^$/d')"
+
+    if [ -z "$bin_need" ]
+    then
+        return 0
+    else
+        return 1
+    fi
+}
+
+InitSystemInfo()
+{
+    if ! check_root
+    then
+        $Info "please run this script with root privilege."
+        echo "please run this script with root privilege."
+        exit 1
+    fi
+
+    if ! check_dist
+    then
+        $Info "unsupported linux distribution."
+        echo "unsupported linux distribution."
+        exit 1
+    fi
+
+    if ! (check_tools 'noquery')
+    then
+        $Info "check depending tools failed."
+        echo "check depending tools failed."
+        exit 1
+    fi
+}
+
+InitPackageInfo()
+{
+    ### get cpu bus width
+    case "$CPU_ARCH" in
+    x86)
+        cpu_arch_width='32'
+        ;;
+    x86_64)
+        cpu_arch_width='64'
+        ;;
+    *)
+        cpu_arch_width=''
+    esac
+
+    ### source files
+    if [ "$INSTALLER" = 'install' ]
+    then
+        if [ "$(which_binary get_uvp_kernel_modules)" != 'none_binary' ]
+        then
+            LCL_UVP_MODULES_PATH=$(get_uvp_kernel_modules "$SYS_TYPE" "$KERN_RELEASE" "$(uname -m)" "$CPU_ARCH")
+            LCL_UVP_MONITOR="${INSTALLER_DIR}/usr/bin${cpu_arch_width}/uvp-monitor"
+            LCL_UVP_ARPING="${INSTALLER_DIR}/usr/bin${cpu_arch_width}/arping"
+            LCL_UVP_NDSEND="${INSTALLER_DIR}/usr/bin${cpu_arch_width}/ndsend"
+	    if [ "$SYS_TYPE" = "gentoo" ]
+	    then
+	    	cp -f ${INSTALLER_DIR}/etc/uvp-monitor-gentoo ${INSTALLER_DIR}/etc/uvp-monitor 2>/dev/null 1>/dev/null
+	    fi
+            LCL_UVP_MONITOR_INIT="${INSTALLER_DIR}/etc/uvp-monitor"
+            LCL_XENVNET_ARP="${INSTALLER_DIR}/etc/xenvnet-arp"
+            LCL_UVP_KERUP="${INSTALLER_DIR}/bin/CheckKernelUpdate.sh"
+            LCL_UVP_FEATURE="${INSTALLER_DIR}/bin/GuestOSFeature"
+            LCL_UVP_CURRENTOS="${INSTALLER_DIR}/CurrentOS"
+            LCL_UVP_MEMONLINE="${INSTALLER_DIR}/bin/mem_online.sh"
+            LCL_UVP_SWAP="${INSTALLER_DIR}/bin/modify_swappiness.sh"
+
+            LCL_LIB_XENSTORE="${INSTALLER_DIR}/usr/lib${cpu_arch_width}/libxenstore.so"
+
+            LCL_XEN_STORAGE_ID="${INSTALLER_DIR}/config/udev/xen_id"
+            LCL_XEN_STORAGE_RULES="${INSTALLER_DIR}/config/udev/60-xen-storage.rules"
+        else
+            LCL_UVP_MODULES_PATH="./${KERN_RELEASE}/updates/pvdriver"
+            LCL_UVP_MONITOR='./uvp-monitor'
+            LCL_UVP_MONITOR_INIT='./uvp-monitor.init'
+
+            LCL_LIB_XENSTORE="./libxenstore.so"
+
+            LCL_XEN_STORAGE_ID='./xen_id'
+            LCL_XEN_STORAGE_RULES="./extra/60-xen-storage.rules"
+
+            local dist=$(echo $DESCRIPTION | awk -F":" '{print $1}')
+            case "$dist" in
+            suse*)
+                dist='suse'
+                ;;
+            redhat*|fedora*|neoshine*)
+                dist='redhat'
+                ;;
+            debian*|ubuntu*)
+                dist='debian'
+                ;;
+            esac
+            local arch=$(echo $DESCRIPTION | awk -F":" '{print $2}')
+            case "$arch" in
+            i[3456789]86|x86)
+                arch="x86"
+                ;;
+            x86_64|amd64)
+                arch="x86_64"
+                ;;
+            esac
+            if [ "$dist" != "$SYS_TYPE" -o "$arch" != "$CPU_ARCH" ]
+            then
+                $Info "this package can not be installed in ${SYS_TYPE}-${CPU_ARCH}."
+                echo "this package can not be installed in ${SYS_TYPE}-${CPU_ARCH}." ; exit 1
+            fi
+
+        fi
+        # check support
+        if [ ! -d "$LCL_UVP_MODULES_PATH" ]
+        then
+            $Info "unsupported linux version."
+            echo "unsupported linux version." ; exit 1
+        fi
+    else
+        LCL_UVP_MODULES_PATH=''
+        LCL_UVP_MONITOR=''
+        LCL_MOUSECONFIG=''
+        LCL_UVP_MONITOR_INIT=''
+
+        LCL_LIB_XENSTORE=''
+
+        LCL_XEN_STORAGE_ID=''
+        LCL_XEN_STORAGE_RULES=''
+    fi
+
+    ### system files
+    UVP_MODULES_PATH="/lib/modules/$KERN_RELEASE/updates/pvdriver"
+    UVP_MODULES_PATH_BACKUP="/lib/modules/${KERN_RELEASE}/uvp_mods_backup.tar"
+    UVP_MONITOR='/usr/bin/uvp-monitor'
+    UVP_ARPING='/etc/.uvp-monitor/arping'
+    UVP_NDSEND='/etc/.uvp-monitor/ndsend'
+    UVP_KERUP='/etc/.uvp-monitor/CheckKernelUpdate.sh'
+    UVP_MEMONLINE='/etc/.uvp-monitor/mem_online.sh'
+    UVP_SWAP='/etc/.uvp-monitor/modify_swappiness.sh'
+    UVP_FEATURE='/etc/.uvp-monitor/GuestOSFeature'
+    UVP_CURRENTOS='/etc/.uvp-monitor/CurrentOS'
+    UVP_MONITOR_INIT='/etc/init.d/uvp-monitor'
+    XENVNET_ARP='/etc/init.d/xenvnet-arp'
+
+    LIB_XENSTORE="${LIB_PATH}/libxenstore.so.3.0"
+
+    if [ -f "/lib/udev/ata_id" ]
+    then
+        XEN_STORAGE_ID="/lib/udev/xen_id"
+    else
+        XEN_STORAGE_ID="/sbin/xen_id"
+    fi
+
+    if [ -d "/lib/udev/rules.d" ]
+    then
+        XEN_STORAGE_RULES='/lib/udev/rules.d/60-xen-storage.rules'
+    elif [ -d "/etc/udev/rules.d" ]
+    then
+        XEN_STORAGE_RULES='/etc/udev/rules.d/60-xen-storage.rules'
+    fi
+
+    # else
+    MODPROBE_XEN_PVDRIVER='/etc/modprobe.d/uvp-pvdriver.conf'
+}
+
+###############################################################################
+# backup and restore
+###############################################################################
+lock_install()
+{
+    $Info "lock_install"
+    LOCK_FILE="${PIDPATH}/pvdriver-install.pid"
+    if [ ! -f "$LOCK_FILE" ]
+    then
+        echo $$ > $LOCK_FILE
+        return $ERR_OK
+    else
+        echo "another pvdriver is installing, please wait for a moment."
+        return $ERR_NG
+    fi
+}
+
+unlock_install()
+{
+    $Info "unlock_install"
+    LOCK_FILE="${PIDPATH}/pvdriver-install.pid"
+    if [ "$$" = "$(cat $LOCK_FILE)" ]
+    then
+        rm -f "$LOCK_FILE"
+        return $ERR_OK
+    else
+        echo "another pvdriver is installing, please wait."
+        return $ERR_NG
+    fi
+}
+
+###############################################################################
+### exception process
+###############################################################################
+BACKUP_LEVEL_FILE="/etc/.pvdriver_backup_level"
+unset INSTALLED_FILE_LIST
+unset MODIFIED_FILE_LIST
+
+### init install level
+if [ -z "$CUR_INSTALL_LEVEL" ]
+then
+    export CUR_INSTALL_LEVEL=1
+else
+    export CUR_INSTALL_LEVEL=$((CUR_INSTALL_LEVEL+1))
+fi
+
+#
+if [ -z "$BAK_INSTALL_LEVEL" -a -f "$BACKUP_LEVEL_FILE" ]
+then
+    export BAK_INSTALL_LEVEL=$(cat $BACKUP_LEVEL_FILE)
+fi
+
+if [ -z "$BAK_INSTALL_LEVEL" ] || [ $BAK_INSTALL_LEVEL -lt 0 ]
+then
+    export BAK_INSTALL_LEVEL=0
+fi
+
+#
+init_backup()
+{
+    ### init
+    unset MODPROBE_XEN_PVDRIVER
+    unset MKINITRD_XEN_PVDRIVER
+
+    ### MODIFIED_FILE_LIST
+    MODIFIED_FILE_LIST=$(readlink -f '/etc/fstab')
+
+    XORG_CONF=$(readlink -f '/etc/X11/xorg.conf')
+
+    ### grub config
+    if [ -f '/boot/grub/grub.conf' ]
+    then
+        MENULIST=$(readlink -f "/boot/grub/grub.conf")
+        MENULIST_CONFIG=''
+    elif [ -f '/boot/grub/menu.lst' ]
+    then
+        MENULIST=$(readlink -f '/boot/grub/menu.lst')
+        MENULIST_CONFIG=''
+    elif [ -f '/boot/grub/grub.cfg' ]
+    then
+        MENULIST=$(readlink -f '/boot/grub/grub.cfg')
+        MENULIST_CONFIG=$(readlink -f '/etc/default/grub')
+    elif [ -f '/boot/grub2/grub.cfg' ]
+    then
+        MENULIST=$(readlink -f '/boot/grub2/grub.cfg')
+        MENULIST_CONFIG=$(readlink -f '/etc/default/grub')
+    elif [ -f '/boot/burg/burg.cfg' ]
+    then
+        MENULIST=$(readlink -f '/boot/burg/burg.cfg')
+        MENULIST_CONFIG=$(readlink -f '/etc/default/burg')
+    elif [ -f '/etc/elilo.conf' ]
+    then
+        UEFI_FLAG="yes"
+        MENULIST=$(readlink -f '/etc/elilo.conf')
+        MENULIST_CONFIG=''
+    elif [ -f '/boot/efi/EFI/redhat/grub.conf' ]
+    then
+        MENULIST=$(readlink -f '/boot/efi/EFI/redhat/grub.conf')
+        MENULIST_CONFIG=''
+    fi
+
+    ## mkinitrd
+    INITRD_FILE=''
+    if [ -f "/etc/initramfs-tools/modules" ]
+    then
+        MKINITRD=$(which_binary update-initramfs)
+        MKINITRD_CONFIG=$(readlink -f "/etc/initramfs-tools/modules")
+        MKINITRD_SETUPUDEV=$(readlink -f "/usr/share/initramfs-tools/hooks/udev")
+        INITRD_FILE="/boot/initrd.img-${KERN_RELEASE}"
+    elif [ "$(which_binary dracut)" != 'none_binary' ] && [ -z "`echo "${KERN_RELEASE}" | grep "3.16.6-2"`" ]
+    then
+        MKINITRD=$(which_binary dracut)
+        MKINITRD_CONFIG=$(readlink -f "/etc/dracut.conf")
+        MKINITRD_SETUPUDEV=$(readlink -f "/usr/share/dracut/modules.d/95udev-rules/install")
+        INITRD_FILE="/boot/initramfs-${KERN_RELEASE}.img"
+    elif [ "$(which_binary mkinitrd)" != 'none_binary' ]
+    then
+        MKINITRD=$(which_binary mkinitrd)
+        if [ -z "$(mkinitrd --help 2>&1 | sed -n '/--with=/p')" ]
+        then
+            MKINITRD_CONFIG=$(readlink -f "/etc/sysconfig/kernel")
+            MKINITRD_SETUPUDEV=$(readlink -f "/lib/mkinitrd/scripts/setup-udev.sh")
+            INITRD_FILE="/boot/initrd-${KERN_RELEASE}"
+        else
+            if [ -n "$(sed -n '/\/etc\/sysconfig\/mkinitrd/p' /sbin/mkinitrd)" ]
+            then
+                if [ -d "/etc/sysconfig/mkinitrd" ]
+                then
+                    MKINITRD_XEN_PVDRIVER="/etc/sysconfig/mkinitrd/uvp-pvdriver.conf"
+                else
+                    touch "/etc/sysconfig/mkinitrd"
+                    MKINITRD_CONFIG=$(readlink -f "/etc/sysconfig/mkinitrd")
+                fi
+            else
+                MKINITRD_CONFIG=$(readlink -f "/etc/udev/udev.conf")
+            fi
+            MKINITRD_SETUPUDEV=''
+            INITRD_FILE="/boot/initrd-${KERN_RELEASE}.img"
+        fi
+    else
+        return 1
+    fi
+
+    if [ -d "/etc/modprobe.d" ]
+    then
+        MODPROBE_XEN_PVDRIVER='/etc/modprobe.d/uvp-pvdriver.conf'
+    elif [ -f '/etc/modprobe.conf' ]
+    then
+        MODPROBE_CONFIG=$(readlink -f '/etc/modprobe.conf')
+    else
+        return 1
+    fi
+
+    MODPROBE_UNSUPPORTED_MODULES=$(readlink -f '/etc/modprobe.d/unsupported-modules')
+
+    NET_GENERATOR_RULES=''
+    if [ -f '/lib/udev/rules.d/75-persistent-net-generator.rules' ]
+    then
+        NET_GENERATOR_RULES=$(readlink -f '/lib/udev/rules.d/75-persistent-net-generator.rules')
+    elif [ -f '/etc/udev/rules.d/75-persistent-net-generator.rules' ]
+    then
+        NET_GENERATOR_RULES=$(readlink -f '/etc/udev/rules.d/75-persistent-net-generator.rules')
+    fi
+
+    LVM_CONF=$(readlink -f '/etc/lvm/lvm.conf')
+    UDEV_CONFIG=$(readlink -f "/etc/udev/udev.conf")
+
+    MODIFIED_FILE_LIST="$XORG_CONF $MODIFIED_FILE_LIST $LVM_CONF $MKINITRD $MKINITRD_CONFIG $MKINITRD_SETUPUDEV $MENULIST $MENULIST_CONFIG $LVM_CONF $MODPROBE_CONFIG $NET_GENERATOR_RULES  $MODPROBE_UNSUPPORTED_MODULES"
+
+    ### INSTALLED_FILE_LIST
+    INSTALLED_FILE_LIST="${UVP_MONITOR_INIT} ${UVP_MONITOR} ${LIB_XENSTORE} ${MOUSECONFIG_INIT} \
+        $UVP_MODULES_PATH $UVP_MODULES_PATH_BACKUP $XEN_STORAGE_ID $XEN_STORAGE_RULES $MODPROBE_XEN_PVDRIVER $MKINITRD_XEN_PVDRIVER"
+
+    ### uniform words
+    INSTALLED_FILE_LIST=$(uniform_string "$INSTALLED_FILE_LIST")
+    MODIFIED_FILE_LIST=$(uniform_string "$MODIFIED_FILE_LIST")
+
+    return 0
+}
+
+backup_all_files()
+{
+    ### backup pvdriver directory
+    if [ -d "$INSTALL_PATH" -a $CUR_INSTALL_LEVEL = 1 ]
+    then
+        if ! cp -afp "$INSTALL_PATH" "${INSTALL_PATH}.bak"
+        then
+            abort "backup pvdriver $INSTALL_PATH failed"
+        fi
+    fi
+
+    ### recursive backup
+    $Info "CUR_INSTALL_LEVEL=$CUR_INSTALL_LEVEL, BAK_INSTALL_LEVEL=$BAK_INSTALL_LEVEL"
+    # restore higher levels
+    if [ $BAK_INSTALL_LEVEL -gt $CUR_INSTALL_LEVEL ]
+    then
+        restore_all_files
+    # already backup
+    elif [ $BAK_INSTALL_LEVEL = $CUR_INSTALL_LEVEL ]
+    then
+        return $ERR_OK
+    # backup lower levels
+    elif [ $BAK_INSTALL_LEVEL -lt $((CUR_INSTALL_LEVEL-1)) ]
+    then
+        abort "inner error."
+    fi
+
+    ### backup all files
+    BAK_INSTALL_LEVEL=$((BAK_INSTALL_LEVEL+1))
+    $Info "Backup all files level=${BAK_INSTALL_LEVEL}."
+    mkdir -p "$INSTALL_PATH"
+    echo "$BAK_INSTALL_LEVEL" > $BACKUP_LEVEL_FILE
+    for file in $INSTALLED_FILE_LIST $MODIFIED_FILE_LIST
+    do
+        if [ -f "$file" ]
+        then
+            rm -f "$(dirname $file)/.$(basename $file).$BAK_INSTALL_LEVEL.bak"
+            if ! cp -fp "$file" "$(dirname $file)/.$(basename $file).$BAK_INSTALL_LEVEL.bak"
+            then
+                abort "backup file $file failed"
+            fi
+        elif [ -d "$file" ]
+        then
+            rm -fr "$(dirname $file)/.$(basename $file).$BAK_INSTALL_LEVEL.bak"
+            if ! cp -afp "$file" "$(dirname $file)/.$(basename $file).$BAK_INSTALL_LEVEL.bak"
+            then
+                abort "backup directory $file failed"
+            fi
+        fi
+    done
+
+    return 0
+}
+
+restore_all_files()
+{
+    ### restore installation directory
+    if [ $CUR_INSTALL_LEVEL = 1 ]
+    then
+        if [ "$INSTALL_ACTION" = "install" ]
+        then
+            rm -fr "${INSTALL_PATH}" "${INSTALL_PATH}.bak"
+        elif [ -d "${INSTALL_PATH}.bak" ]
+        then
+            rm -fr "$INSTALL_PATH"
+            mv -f "${INSTALL_PATH}.bak" "${INSTALL_PATH}"
+        fi
+    fi
+
+    ### recursive restore
+    # already restore
+    if [ $BAK_INSTALL_LEVEL -lt $CUR_INSTALL_LEVEL ]
+    then
+        return 0
+    # restore higher levels
+    elif [ $BAK_INSTALL_LEVEL -gt $CUR_INSTALL_LEVEL ]
+    then
+        # restore deeper level
+        if ! $UNINSTALLER_DIR/$UNINSTALLER -r
+        then
+            warn "restore upper backup failed, backup level $CUR_INSTALL_LEVEL-$BAK_INSTALL_LEVEL is discarded."
+        fi
+        BAK_INSTALL_LEVEL=$CUR_INSTALL_LEVEL
+    fi
+
+    ### restore all files
+    for file in $INSTALLED_FILE_LIST
+    do
+        if [ "$INSTALL_ACTION" = "install" -a -e "$UVP_MODULES_PATH_BACKUP" ]
+        then
+            if [ "$file" = "$UVP_MODULES_PATH_BACKUP" ]
+            then
+                tar -xPf "$UVP_MODULES_PATH_BACKUP"
+            fi
+
+            rm -fr "$file"
+        elif [ -e "$(dirname $file)/.$(basename $file).$BAK_INSTALL_LEVEL.bak" ]
+        then
+            rm -fr "$file"
+            mv -f "$(dirname $file)/.$(basename $file).$BAK_INSTALL_LEVEL.bak" "$file"
+
+            if [ "$file" = "$UVP_MODULES_PATH_BACKUP" ]
+            then
+                tar -tPf "$file" | xargs rm -fr
+            fi
+        fi
+    done
+
+    for file in $MODIFIED_FILE_LIST
+    do
+        if [ -e "$(dirname $file)/.$(basename $file).$BAK_INSTALL_LEVEL.bak" ]
+        then
+            rm -fr "$file"
+            mv -f "$(dirname $file)/.$(basename $file).$BAK_INSTALL_LEVEL.bak" "$file"
+        fi
+    done
+    $Info "Restore all files level=${BAK_INSTALL_LEVEL}."
+    BAK_INSTALL_LEVEL=$((BAK_INSTALL_LEVEL-1))
+    echo "$BAK_INSTALL_LEVEL" > $BACKUP_LEVEL_FILE
+
+    ### decrease level
+    if [ $CUR_INSTALL_LEVEL = 1 ]
+    then
+        if [ "$INSTALL_ACTION" = "install" ]
+        then
+            [ "$AUTO_UPGRADE" != 'true' ] && kill_proc "${UVP_MONITOR}"
+        else
+            if ! $UNINSTALLER_DIR/$UNINSTALLER -s
+            then
+                echo "restart service for pvdriver failed, please start it by yourself"
+            fi
+        fi
+        rm -f $BACKUP_LEVEL_FILE
+    else
+        echo "$BAK_INSTALL_LEVEL" > $BACKUP_LEVEL_FILE
+    fi
+
+    return 0
+}
+
+clean_all_files()
+{
+    ### check level
+    if [ $BAK_INSTALL_LEVEL -lt $CUR_INSTALL_LEVEL ]
+    then
+        return 0
+    fi
+
+    ### iterative restore all files
+    for ((level=3; level>=$CUR_INSTALL_LEVEL; level--))
+    do
+        for file in $INSTALLED_FILE_LIST $MODIFIED_FILE_LIST
+        do
+            rm -fr "$(dirname $file)/.$(basename $file).$level.bak"
+        done
+    done
+    $Info "Clean all files level=$CUR_INSTALL_LEVEL$([ $CUR_INSTALL_LEVEL -lt $BAK_INSTALL_LEVEL ] && echo -n -${BAK_INSTALL_LEVEL})."
+    BAK_INSTALL_LEVEL=$((CUR_INSTALL_LEVEL-1))
+    echo "$BAK_INSTALL_LEVEL" > $BACKUP_LEVEL_FILE
+
+    ### decrease level
+    if [ $CUR_INSTALL_LEVEL = 1 ]
+    then
+        rm -f $BACKUP_LEVEL_FILE
+    else
+        echo "$BAK_INSTALL_LEVEL" > $BACKUP_LEVEL_FILE
+    fi
+
+    ### cleanup installation directory
+    if [ $CUR_INSTALL_LEVEL = 1 ]
+    then
+        rm -fr "${INSTALL_PATH}.bak"
+    fi
+
+    return 0
+}
+###############################################################################
+# Exception Process Interface
+###############################################################################
+# prompt installation
+warn()
+{
+    $Info "call warn: $1"
+    local message=$1
+    if [ -n "$message" ]
+    then
+        echo 1>&2 "warning: $message"
+    fi
+    return $ERR_OK
+}
+
+# abort installation
+abort()
+{
+    trap "" INT TERM QUIT HUP
+    $Info "call abort: $1"
+    local message=$1
+    if [ -n "$message" ]
+    then
+        echo 1>&2 "error: $message"
+    fi
+
+    if restore_all_files
+    then
+        $Info "Restore all files success."
+    else
+        $Info "Restore all files failed."
+    fi
+
+    if [ $CUR_INSTALL_LEVEL = 1 ]
+    then
+        rmdir $INSTALL_PATH 1>/dev/null 2>&1
+        unlock_install
+    fi
+    rm -fr $WORKDIR
+    sync
+    exit $ERR_ABORT
+}
+
+# cancel signal process
+cancel()
+{
+    trap "" INT TERM QUIT HUP
+    $Info "call cancel: $1"
+
+    if restore_all_files
+    then
+        $Info "Restore all files success."
+    else
+        $Info "Restore all files failed."
+    fi
+
+    if [ $CUR_INSTALL_LEVEL = 1 ]
+    then
+        rmdir $INSTALL_PATH 1>/dev/null 2>&1
+        unlock_install
+        echo
+        echo "Operation canceled."
+    fi
+    rm -fr $WORKDIR
+    sync
+    exit $ERR_CANCEL
+}
+
+###############################################################################
+# PV ops kernels emit gratuitous ARPs on migrate when this is set
+###############################################################################
+GetArpNotifySet()
+{
+    # PV ops kernels do not emit gratuitous ARPs on migrate unless this is set
+    sys_file=/proc/sys/net/ipv4/conf/all/arp_notify
+
+    if [ -f ${sys_file} ]
+    then
+        return 0
+    fi
+    return 1
+}
+
+EnableArpNotifySetting()
+{
+    sysctl_file=/etc/sysctl.conf
+
+    if GetArpNotifySet
+    then
+        arp_notify_val=1
+    else
+        arp_notify_val=0
+    fi
+
+    if [ "${arp_notify_val}" -gt 0 ] ; then
+        echo "  enable arp_notify setting." >&2
+    else
+        return 1
+    fi
+
+    if [ ! -e "${sysctl_file}" ] ; then
+        echo "  Fail to enable arp_notify setting as no ${sysctl_file} present." >&2
+        return 1
+    fi
+
+    ETHDEV=$(ls /proc/sys/net/ipv4/conf/)
+
+    sed -i -e 's/\(^\s*net\.ipv4\.conf\.[^.]\+\.arp_notify\s*=\s*0\)/${MARKER_COMMENT}\n#\1/' ${sysctl_file}
+    echo -e "${MARKER_BEGIN}${MARKER_WARNING}" >> ${sysctl_file}
+    for dev in $ETHDEV
+    do
+        echo -e "net.ipv4.conf.${dev}.arp_notify = 1" >> ${sysctl_file}
+    done
+    echo -e "${MARKER_END}" >> ${sysctl_file}
+    sysctl -p ${sysctl_file} >/dev/null 2>&1
+
+    return 0
+}
+
+RestoreArpNotifySetting()
+{
+    sysctl_file=/etc/sysctl.conf
+
+    if [ ! -e "${sysctl_file}" ] ; then
+        echo "  Fail to restore arp_notify setting as no ${sysctl_file} present." >&2
+        return 1
+    fi
+
+    sed -i '/###pvdriver<begin>/,/###pvdriver<end>/d' ${sysctl_file} >/dev/null 2>&1
+    sysctl -p ${sysctl_file} >/dev/null 2>&1
+
+    rm -rf ${XENVNET_ARP}
+
+    return 0;
+}
+
+###############################################################################
+# install driver
+###############################################################################
+#unzip initrd and change initrd
+InstallModules()
+{
+    echo "  install kernel modules."
+
+    ### replace xen modules
+    if [ ! -d "$LCL_UVP_MODULES_PATH" ]
+    then
+        abort "kernel $KERN_RELEASE is not supported"
+    fi
+
+    if [ "$kernel_param_flag" = "1" ]
+    then
+        mkdir -p "$UVP_MODULES_PATH" 2>/dev/null 1>/dev/null
+        cp -Rf "$LCL_UVP_MODULES_PATH"/* "$UVP_MODULES_PATH" 2>/dev/null 1>/dev/null
+        chmod -R 755 "$UVP_MODULES_PATH" 2>/dev/null 1>/dev/null
+    else
+        xen_mods_dir=$(dirname "$UVP_MODULES_PATH")
+        mkdir -p "$xen_mods_dir"
+        for item in $(find ${xen_mods_dir} -path "${xen_mods_dir}/.*" -prune -o -type f -name 'xen*.ko' -print | sed "s;\(${xen_mods_dir}/[^/]*\).*;\1;g"  | sed '$!N; /^\(.*\)\n\1$/!P; D')
+        do
+            if ! (tar -rPf "$UVP_MODULES_PATH_BACKUP" "${item}" && rm -fr "${item}")
+            then
+                abort "backup kernel built-in modules ${item} failed."
+            fi
+        done
+
+        rm -fr "${UVP_MODULES_PATH}"
+        if ! (cp -Rf "$LCL_UVP_MODULES_PATH" "$UVP_MODULES_PATH" && chmod -R 755 "$UVP_MODULES_PATH")
+        then
+            abort "install $UVP_MODULES_PATH failed"
+        fi
+    fi
+    if [ ! -f "${UVP_MODULES_PATH}/xen-balloon/xen-balloon.ko" ]
+    then
+        BALLOONMOD="#"
+    fi
+    if [ ! -f "${UVP_MODULES_PATH}/xen-hcall/xen-hcall.ko" ]
+    then
+        HCALLMOD="#"
+    fi
+    if [ ! -f "${UVP_MODULES_PATH}/xen-vmdq/xen-vmdq.ko" ]
+    then
+        VMDQMOD="#"
+    fi
+    if [ ! -f "${UVP_MODULES_PATH}/xen-scsi/xen-scsifront.ko" ]
+    then
+        SCSIMOD="#"
+    fi
+
+    chmod -R 544 $RC_SYSINIT >/dev/null 2>&1
+    sed -i "$ a\
+###pvdriver<begin> \n\
+# Let load XENPV modules \n\
+${BALLOONMOD}modprobe xen-balloon >/dev/null 2>&1\n\
+${HCALLMOD}modprobe xen-hcall >/dev/null 2>&1\n\
+${VMDQMOD}modprobe xen-vmdq >/dev/null 2>&1\n\
+${SCSIMOD}modprobe xen-scsifront >/dev/null 2>&1\n\
+###pvdriver<end>" $RC_SYSINIT >/dev/null 2>&1
+}
+
+#unzip initrd.img and restore initrd
+UninstallModules()
+{
+    echo "  uninstall kernel modules."
+
+    if [ "$kernel_param_flag" = "1" ]
+    then
+        true
+    elif [ -f "$UVP_MODULES_PATH_BACKUP" ]
+    then
+        if ! (tar -xPf "$UVP_MODULES_PATH_BACKUP" && rm -fr "$UVP_MODULES_PATH_BACKUP")
+        then
+            abort "restore kernel built-in modules failed."
+        fi
+    fi
+    rm -fr "$UVP_MODULES_PATH"
+
+    sed -i '/###pvdriver<begin>/,/###pvdriver<end>/d' $RC_SYSINIT >/dev/null 2>&1
+}
+
+###############################################################################
+### service functions
+###############################################################################
+# Install a init script
+add_init_script()
+{
+    local srv_script=$1
+    local srv_name=$(basename "${srv_script}" | sed 's/\.init$//g')
+
+    if [ "$INIT_TYPE" = "sysv" ]
+    then
+        if ! (cp -f "$srv_script" "/etc/init.d/$srv_name" && chmod 755 "/etc/init.d/$srv_name")
+        then
+            abort "install /etc/init.d/$srv_name failed"
+        fi
+    else
+        $Info "inner error: INIT_TYPE=$INIT_TYPE"
+        return $ERR_NG
+    fi
+
+    return $ERR_OK
+}
+
+# Remove a init script
+remove_init_script()
+{
+    local srv_script=$1
+    local srv_name=$(basename "${srv_script}" | sed 's/\.init$//g')
+
+    if [ "$INIT_TYPE" = "sysv" ]
+    then
+        rm -f "/etc/init.d/$srv_name"
+    else
+        $Info "inner error: INIT_TYPE=$INIT_TYPE"
+        return $ERR_NG
+    fi
+
+    return $ERR_OK
+}
+
+# Add a service to a runlevel
+add_rc_config()
+{
+    local srv_script=$1
+    local srv_name=$(basename "${srv_script}" | sed 's/\.init$//g')
+
+    # Redhat-based systems
+    if [ "$SYS_TYPE" = "redhat" ]
+    then
+        chkconfig --del $srv_name > /dev/null 2>&1
+        if chkconfig -v > /dev/null 2>&1
+        then
+            if ! chkconfig --level 35 $srv_name on
+            then
+                $Info "enable $srv_name failed."
+                return $ERR_NG
+            fi
+        else
+            if ! chkconfig $srv_name 35
+            then
+                $Info "enable $srv_name failed."
+                return $ERR_NG
+            fi
+        fi
+    # Suse-based systems
+    elif [ "$SYS_TYPE" = "suse" ]
+    then
+        insserv -r $srv_name > /dev/null 2>&1
+        if ! insserv $srv_name > /dev/null 2>&1
+        then
+            $Info "enable $srv_name failed."
+            return $ERR_NG
+        fi
+    # Debian-based systems
+    elif [ "$SYS_TYPE" = "debian" ]
+    then
+        # Debian does not support dependencies currently -- $2: start sequence number and argument, $3: stop sequence number
+        update-rc.d -f $srv_name remove > /dev/null 2>&1
+        if ! update-rc.d $srv_name defaults $2 $3 > /dev/null 2>&1
+        then
+            $Info "enable $srv_name failed."
+            return $ERR_NG
+        fi
+    elif [ "$SYS_TYPE" = "gentoo" ]
+    then
+        # Debian does not support dependencies currently -- $2: start sequence number and argument, $3: stop sequence number
+        rc-update del $srv_name default > /dev/null 2>&1
+        if ! rc-update add $srv_name default > /dev/null 2>&1
+        then
+            $Info "enable $srv_name failed."
+            return $ERR_NG
+        fi
+    else
+        $Info "inner error: INIT_TYPE=$INIT_TYPE"
+        return $ERR_NG
+    fi
+
+    return $ERR_OK
+}
+
+# Delete a service from a runlevel
+remove_rc_config()
+{
+    local srv_script=$1
+    local srv_name=$(basename "${srv_script}" | sed 's/\.init$//g')
+
+    # Redhat-based systems
+    if [ "$SYS_TYPE" = "redhat" ]
+    then
+        if ! chkconfig --del $srv_name > /dev/null 2>&1
+        then
+            $Info "disable $srv_name failed."
+            warn "disable $srv_name failed."
+        fi
+    # Suse-based systems
+    elif [ "$SYS_TYPE" = "suse" ]
+    then
+        if ! insserv -r $srv_name > /dev/null 2>&1
+        then
+            $Info "disable $srv_name failed."
+            warn "disable $srv_name failed."
+        fi
+    # Debian-based systems
+    elif [ "$SYS_TYPE" = "debian" ]
+    then
+        if ! update-rc.d -f $srv_name remove > /dev/null 2>&1
+        then
+            $Info "disable $srv_name failed."
+            warn "disable $srv_name failed."
+        fi
+    elif [ "$SYS_TYPE" = "gentoo" ]
+    then
+        if ! rc-update del $srv_name default > /dev/null 2>&1
+        then
+            $Info "disable $srv_name failed."
+            warn "disable $srv_name failed."
+        fi
+    else
+        $Info "inner error: INIT_TYPE=$INIT_TYPE"
+        return $ERR_NG
+    fi
+
+    return $ERR_OK
+}
+
+# Start the init script
+start_init_script()
+{
+    local srv_script=$1
+    local srv_name=$(basename "${srv_script}" | sed 's/\.init$//g')
+
+    if [ "$INIT_TYPE" = "sysv" ]
+    then
+        if [ -x "/etc/init.d/$srv_name" ]
+        then
+            /etc/init.d/$srv_name start >/dev/null
+            return $?
+        else
+            return 2
+        fi
+
+    else
+        $Info "inner error: INIT_TYPE=$INIT_TYPE"
+        return 1
+    fi
+}
+
+# Stop the init script
+stop_init_script()
+{
+    local srv_script=$1
+    local srv_name=$(basename "${srv_script}" | sed 's/\.init$//g')
+
+    if [ "$INIT_TYPE" = "sysv" ]
+    then
+        if [ -x "/etc/init.d/$srv_name" ]
+        then
+            /etc/init.d/$srv_name stop >/dev/null
+            return $?
+        else
+            return 2
+        fi
+    else
+        $Info "inner error: INIT_TYPE=$INIT_TYPE"
+        return 1
+    fi
+}
+
+###############################################################################
+# install GuestOS Support Feature File
+###############################################################################
+InstallFeatureFile()
+{
+    echo "  install GuestOS Support Feature File."
+
+    if ! (cp -f "${LCL_UVP_CURRENTOS}" "${UVP_CURRENTOS}" && chmod 640 "${UVP_CURRENTOS}")
+    then
+        $Info "install ${UVP_CURRENTOS} failed"
+        abort "install ${UVP_CURRENTOS} failed"
+    fi
+
+    if ! (cp -f "${LCL_UVP_FEATURE}" "${UVP_FEATURE}" && chmod 640 "${UVP_FEATURE}")
+    then
+        $Info "install ${UVP_FEATURE} failed"
+        abort "install ${UVP_FEATURE} failed"
+    fi
+}
+
+
+###############################################################################
+# install monitor
+###############################################################################
+InstallServices()
+{
+    echo "  install uvp-monitor service."
+
+    if ! (cp -f "${LCL_LIB_XENSTORE}" "${LIB_XENSTORE}" && chmod 755 "${LIB_XENSTORE}")
+    then
+        $Info "install ${LIB_XENSTORE} failed"
+        abort "install ${LIB_XENSTORE} failed"
+    fi
+
+    if ! (cp -f "${LCL_UVP_MONITOR}" "${UVP_MONITOR}" && chmod 755 "${UVP_MONITOR}")
+    then
+        $Info "install ${UVP_MONITOR} failed"
+        abort "install ${UVP_MONITOR} failed"
+    fi
+
+    if ! (cp -f "${LCL_UVP_KERUP}" "${UVP_KERUP}" && chmod 755 "${UVP_KERUP}")
+    then
+        $Info "install ${UVP_KERUP} failed"
+        abort "install ${UVP_KERUP} failed"
+    fi
+
+    if ! (cp -f "${LCL_UVP_MEMONLINE}" "${UVP_MEMONLINE}" && chmod 544 "${UVP_MEMONLINE}")
+    then
+        $Info "install ${UVP_MEMONLINE} failed"
+        abort "install ${UVP_MEMONLINE} failed"
+    fi
+
+    if ! ( cp -f "${LCL_UVP_SWAP}" "${UVP_SWAP}" && chmod 644 "${UVP_SWAP}")
+    then
+        $Info "install ${UVP_SWAP} failed"
+        abort "install ${UVP_SWAP} failed"
+    fi
+
+    if ! add_init_script "${LCL_UVP_MONITOR_INIT}"
+    then
+        $Info "add_init_script ${LCL_UVP_MONITOR_INIT} failed"
+        abort "add_init_script ${LCL_UVP_MONITOR_INIT} failed"
+    fi
+
+    if ! add_rc_config "${UVP_MONITOR_INIT}"
+    then
+        $Info "setup ${UVP_MONITOR_INIT} failed"
+        abort "setup ${UVP_MONITOR_INIT} failed"
+    fi
+
+    [ "$AUTO_UPGRADE" != 'true' ] && start_init_script "${UVP_MONITOR_INIT}"
+    if ! cat > "$INSTALL_PATH/version.ini" << EOF
+pvdriverVersion=${INSTALL_VERSION}
+DriverVersion=${DRIVER_VERSION}
+kernelVersion="${KERN_RELEASE}"
+UserDriVer=${USERDRI_VERSION}
+EOF
+    then
+        abort "install $INSTALL_PATH/version.ini failed"
+    fi
+}
+
+UninstallFeatureFile()
+{
+
+    echo "  uninstall GuestOS Support Feature File."
+    rm -f ${UVP_FEATURE} ${UVP_CURRENTOS}
+}
+
+UninstallServices()
+{
+    echo "  uninstall uvp-monitor service."
+
+    [ "$AUTO_UPGRADE" != 'true' ] && stop_init_script "${UVP_MONITOR_INIT}"
+
+    ### uninstall monitor service
+    if ! remove_rc_config "${UVP_MONITOR_INIT}"
+    then
+        $Info "remove_rc_config ${UVP_MONITOR_INIT} failed"
+        abort "remove_rc_config ${UVP_MONITOR_INIT} failed"
+    fi
+
+    if ! remove_init_script "${UVP_MONITOR_INIT}"
+    then
+        $Info "remove_init_script ${UVP_MONITOR_INIT} failed"
+        abort "remove_init_script ${UVP_MONITOR_INIT} failed"
+    fi
+
+    rm -f "${LIB_XENSTORE}" "${UVP_MONITOR}" ${UVP_NDSEND} ${UVP_ARPING} "${UVP_KERUP}" "${UVP_MEMONLINE}" "${UVP_SWAP}"
+}
+
+###############################################################################
+# change linux configuration
+###############################################################################
+# output emu_bus lvm_blkdev_type
+check_disk_driver()
+{
+    ### add udev storage rules
+    #depmod
+    for mod in ide-core ide-disk scsi-mod sd-mod
+    do
+        modprobe $mod >/dev/null 2>&1
+    done
+    if [ -n "`uname -r | grep 2.6.29-bigsmp`" ]
+    then
+        emu_bus='ata'
+    elif [ -n "`uname -r | grep 2.6.23.1-42.fc8`" ]
+    then
+        emu_bus='scsi'
+    elif [ -d '/sys/bus/scsi/drivers/sd' -a -f '/sys/bus/scsi/drivers/sd/uevent' -a -z "`uname -r | grep 2.6.26-2`" ]
+    then
+        emu_bus='scsi'
+    elif [ -d '/sys/bus/ide/drivers/ide-disk' ]
+    then
+        emu_bus='ata'
+    else
+        abort "can not determine your block device driver."
+    fi
+}
+
+change_mkinitrd()
+{
+    local emu_bus
+    local lvm_blkdev_type
+
+    ### cleanup
+    for config_file in "$MKINITRD" "$MKINITRD_CONFIG" "$MKINITRD_SETUPUDEV" "$UDEV_CONF"
+    do
+        remove_block "$config_file"
+    done
+
+    ### get modules list
+    if [ -d "$UVP_MODULES_PATH" ]
+    then
+        pv_mods=''
+        for mod in $(find "$UVP_MODULES_PATH" -type f -name "*.ko")
+        do
+            mod="${mod##*/}" ; mod="${mod%%.ko}"
+            pv_mods="$pv_mods $mod"
+        done
+    else
+        pv_mods=' xen-platform-pci xen-vbd xen-vnif xen-balloon'
+    fi
+
+    # udev rules for storage
+    if ! (cp -f "${LCL_XEN_STORAGE_ID}" "$XEN_STORAGE_ID" && chmod -R 755 "$XEN_STORAGE_ID")
+    then
+        abort "install $XEN_STORAGE_ID failed"
+    fi
+
+    if ! (cp -f "${LCL_XEN_STORAGE_RULES}" "${XEN_STORAGE_RULES}" && chmod -R 644 "${XEN_STORAGE_RULES}")
+    then
+        abort "install $XEN_STORAGE_RULES failed"
+    fi
+    check_disk_driver
+    sed -i "s;%XEN_ID%;${XEN_STORAGE_ID} -b $emu_bus;g" "$XEN_STORAGE_RULES"
+    sed -i "s;%XEN_DRIVERS%;${pv_mods};g" "$XEN_STORAGE_RULES"
+
+    modprobe_conf=$MODPROBE_XEN_PVDRIVER
+    if [ -n "$modprobe_conf" ]
+    then
+        touch "$MODPROBE_XEN_PVDRIVER"
+    elif [ -f "$MODPROBE_CONFIG" ]
+    then
+        modprobe_conf=$MODPROBE_CONFIG
+    else
+        abort "config modprobe failed."
+    fi
+
+    insert_block "$modprobe_conf" "$" "\
+alias 8139cp off
+install 8139cp :
+alias 8139too off
+install 8139too :"
+
+    ### modify mkinitrd
+    if [ -f "/etc/initramfs-tools/modules" ]
+    then
+        ###
+        anchor_expreg=$(sed -n '/^\s*\([^#].*\|$\)/=' "$MKINITRD_CONFIG" | sed -n '1p')
+        if [ -z "$anchor_expreg" ]
+        then
+            anchor_expreg='$'
+        else
+            anchor_expreg=$((anchor_expreg-1))
+        fi
+
+        insert_block "$MKINITRD_CONFIG" "$anchor_expreg" "$(echo "${pv_mods}" | sed 's/\s\+/\n/g')"
+        insert_block "$MKINITRD_SETUPUDEV" "$" "\
+copy_exec ${XEN_STORAGE_ID} /lib/udev
+cp -p  ${XEN_STORAGE_RULES} \${DESTDIR}/etc/udev/rules.d"
+    elif [ "$(which_binary dracut)" != 'none_binary' ]
+    then
+        insert_block "$MKINITRD_CONFIG" "$" "add_drivers=\"${pv_mods} \$add_drivers\""
+        insert_block "$MKINITRD_SETUPUDEV" "$" "inst_rules \"${XEN_STORAGE_RULES}\""
+        insert_block "$MKINITRD_SETUPUDEV" "$" "dracut_install \"${XEN_STORAGE_ID}\""
+    elif [ "$(which_binary mkinitrd)" != 'none_binary' ]
+    then
+        if [ -n "$(mkinitrd --help 2>&1 | sed -n '/--with=/p')" ]
+        then
+            ##
+            if [ -n "$MKINITRD_XEN_PVDRIVER" ]
+            then
+                touch "$MKINITRD_XEN_PVDRIVER" && chmod 755 "$MKINITRD_XEN_PVDRIVER"
+                insert_block "$MKINITRD_XEN_PVDRIVER" "$" "PREMODS=\"${pv_mods} \${PREMODS}\""
+            elif [ -n "${MKINITRD_CONFIG}" ]
+            then
+                insert_block "$MKINITRD_CONFIG" "$" "PREMODS=\"${pv_mods} \${PREMODS}\""
+            else
+                basic_mods=$(echo "${pv_mods}" | sed 's/\s\+/ --preload=/g')
+                insert_block "$MKINITRD" "1" "\
+[ -z \"\$uvp_pvdriver_mkinitrd_level\" ] && export uvp_pvdriver_mkinitrd_level=0
+uvp_pvdriver_mkinitrd_level=\$((uvp_pvdriver_mkinitrd_level + 1))
+if [ \$uvp_pvdriver_mkinitrd_level = 1 ]
+then
+    mkinitrd ${basic_mods} \$@
+    exit \$?
+fi" ##syntax highlight"
+            fi
+
+            if [ -z "$(mkinitrd --help 2>&1 | sed -n '/--help/p')" ]
+            then
+                if ! (cp -f "${LCL_XEN_STORAGE_RULES}.legacy" "$XEN_STORAGE_RULES" && chmod -R 644 "$XEN_STORAGE_RULES")
+                then
+                    abort "install ${XEN_STORAGE_RULES} failed"
+                fi
+            fi
+        else
+            ### modules
+            insert_block "${MKINITRD_CONFIG}" "$" "INITRD_MODULES=\"${pv_mods} \${INITRD_MODULES}\""
+
+            ### udev rules
+            if [ -f "$MKINITRD_SETUPUDEV" ]
+            then
+                insert_block "$MKINITRD_SETUPUDEV" "$" "cp ${XEN_STORAGE_RULES} \$tmp_mnt/${XEN_STORAGE_RULES}"
+            else
+                insert_word "$MKINITRD" "ata_id" "$(basename $XEN_STORAGE_ID)"
+                insert_word "$MKINITRD" "60-persistent-storage.rules" "$(basename $XEN_STORAGE_RULES)"
+            fi
+        fi
+    else
+        return $ERR_NG
+    fi
+
+    return $ERR_OK
+}
+
+restore_mkinitrd()
+{
+    ### get modules list
+    hv_mods=" sd_mod ata_piix"
+    if [ -n "`uname -r | grep 2.6.18-SKL1.9.4.ky3.173.4.1`" ]; then
+        hv_mods=" sd_mod"
+    fi
+    if [ -n "`uname -r | grep 2.6.29-bigsmp`" ]; then
+        hv_mods=""
+    fi
+
+    ### cleanup
+    # remove installed files
+    rm -f "$XEN_STORAGE_ID" "$XEN_STORAGE_RULES" "$MODPROBE_XEN_PVDRIVER"
+
+    # remove inserted blocks
+    for config_file in "$MKINITRD" "$MKINITRD_CONFIG" "$MKINITRD_SETUPUDEV" "$MODPROBE_CONFIG" "$UDEV_CONF"
+    do
+        remove_block "$config_file"
+    done
+
+    ###
+    if [ -f "/etc/initramfs-tools/modules" ]
+    then
+        insert_block "$MKINITRD_CONFIG" "$" "$(echo "${hv_mods}" | sed 's/\s\+/\n/g')"
+    elif [ "$(which_binary dracut)" != 'none_binary' ]
+    then
+        insert_block "$MKINITRD_CONFIG" "$" "add_drivers=\"${hv_mods} \$add_drivers\""
+    elif [ "$(which_binary mkinitrd)" != 'none_binary' ]
+    then
+        if [ -n "$(mkinitrd --help 2>&1 | sed -n '/--with=/p')" ]
+        then
+            ### modules
+            if [ -n "$MKINITRD_XEN_PVDRIVER" ]
+            then
+                : > "$MKINITRD_XEN_PVDRIVER" && chmod 755 "$MKINITRD_XEN_PVDRIVER"
+                insert_block "$MKINITRD_XEN_PVDRIVER" "$" "basicmodules=\"${hv_mods} \${basicmodules}\""
+            elif [ -n "${MKINITRD_CONFIG}" ]
+            then
+                insert_block "$MKINITRD_CONFIG" "$" "basicmodules=\"${hv_mods} \${basicmodules}\""
+            else
+                basic_mods=$(echo "${hv_mods}" | sed 's/\s\+/ --with=/g')
+                insert_block "$MKINITRD" "1" "\
+[ -z \"\$uvp_pvdriver_mkinitrd_level\" ] && export uvp_pvdriver_mkinitrd_level=0
+uvp_pvdriver_mkinitrd_level=\$((uvp_pvdriver_mkinitrd_level + 1))
+if [ \$uvp_pvdriver_mkinitrd_level = 1 ]
+then
+    mkinitrd ${basic_mods} \$@
+    exit \$?
+fi" ##syntax highlight"
+            fi
+        else
+            ### modules
+            insert_block "${MKINITRD_CONFIG}" "$" "INITRD_MODULES=\"${hv_mods} \${INITRD_MODULES}\""
+
+            ### udev rules
+            if [ -f "$MKINITRD_SETUPUDEV" ]
+            then
+                remove_block "$MKINITRD_SETUPUDEV" "$" "cp ${XEN_STORAGE_RULES} $tmp_mnt/${XEN_STORAGE_RULES}"
+            else
+                remove_word "$MKINITRD" "ata_id" "$(basename $XEN_STORAGE_ID)"
+                remove_word "$MKINITRD" "60-persistent-storage.rules" "$(basename $XEN_STORAGE_RULES)"
+            fi
+        fi
+    else
+        return $ERR_NG
+    fi
+
+    return $ERR_OK
+}
+
+## export these information of a boot entry:
+## Import Variables:
+## $DESCRIPTION
+#
+# Export Information Variables:
+# $entry_num
+# $begin_line
+# $title_line
+# $end_line
+# $root_line
+# $kernel_line
+# $initrd_line
+# $kernel_release
+# $root_file
+# $kernel_file
+# $initrd_file
+info_boot_entry()
+{
+    local menu_lst=$1
+    entry_num=$2
+    local var_list="menu_default menu_start begin_line end_line title_line root_line kernel_line initrd_line"
+    local comment="init"
+
+    ### set default parameter
+    if [ ! -f "$menu_lst" ]
+    then
+        $Info "can not find $menu_lst."
+        return $ERR_FILE_NOEXIST
+    fi
+
+    menu_default=$(sed -n '/^\s*default\s*=\{0,1\}\s*[0-9]\+\s*$/=' $menu_lst | sed -n '$p')
+    if [ -z "$entry_num" ]
+    then
+        if [ -n "$menu_default" ]
+        then
+            entry_num=$(($(sed -n "${menu_default}p" $menu_lst | sed "s/^\s*default\s*=\{0,1\}\s*\([0-9]\+\)\s*$/\1/g")+1))
+        else
+            $Info "can not find default boot entry in $menu_lst."
+            return $ERR_NG
+        fi
+    elif [ $entry_num -le 0 ]
+    then
+        return 1
+    fi
+
+    ### initialize all variables
+    for var in $var_list
+    do
+        unset $var
+    done
+
+    menu_start=$(sed -n '/^\s*title\s\+/=' "${menu_lst}" | sed -n '1p')
+    if [ -z "$menu_start" ]
+    then
+        menu_start=$(sed -n '$=' $menu_lst)
+        return 0
+    fi
+
+    ## process grub entry top
+    # get [title_line] of grub entry
+    title_line=$(grep -n "^[[:space:]]*title[[:space:]]\+" $menu_lst | sed -n "${entry_num}p" | awk -F ":" '{print $1}')
+    if [ -z "$title_line" ]
+    then
+        $Info "can not find boot entry ${entry_num} in $menu_lst."
+        return $ERR_NG
+    fi
+    # get [begin_line] of grub entry
+    comment=$(sed -n "$(($title_line-1))p" $menu_lst | grep "^[[:space:]]*###.*YaST.*identifier:.*linux[[:space:]]*###[[:space:]]*$")
+    if [ -n "$comment" ] # include grub comment above
+    then
+        begin_line=$((title_line-1))
+    else
+        begin_line=$title_line
+    fi
+    ## process grub entry bottom
+    # get [end_line] of grub entry
+    end_line=$(grep -n "^[[:space:]]*title[[:space:]]\+" $menu_lst | sed -n "$(($entry_num+1))p" | awk -F ":" '{print $1}')
+    [ -z "$end_line" ] && end_line=$(sed -n '$=' "$menu_lst")
+    while [ -n "$(sed -n ${end_line}s/\(^\s*#.*\)/\1/p $menu_lst)" ] # omit grub comment below
+    do
+        end_line=$((end_line-1))
+    done
+
+    ## get other line of grub entry
+    for ((line_num=$begin_line; line_num<=$end_line; line_num++))
+    do
+        line=$(sed -n "${line_num}p" $menu_lst)
+        if [ -n "$(echo -n "$line" | grep "^[[:space:]]*root[[:space:]]\+")" ] ; then root_line=$line_num ; fi
+        if [ -n "$(echo -n "$line" | grep "^[[:space:]]*kernel[[:space:]]\+")" ] ; then kernel_line=$line_num ; fi
+        if [ -n "$(echo -n "$line" | grep "^[[:space:]]*initrd[[:space:]]\+")" ] ; then initrd_line=$line_num ; fi
+    done
+
+    ### return susess
+    return 0
+}
+info_boot_entry_uefi()
+{
+    local menu_lst=$1
+    entry_num=$2
+    local comment="init"
+    local var_list="menu_default menu_start begin_line end_line root_line kernel_line initrd_line"
+
+    ### set default parameter
+    if [ ! -f "$menu_lst" ]
+    then
+        $Info "can not find $menu_lst."
+        return $ERR_FILE_NOEXIST
+    fi
+
+    menu_default=$(sed -n '/^\s*default\s*=\{0,1\}\s*\+\S\+\s*$/=' $menu_lst | sed -n '$p')
+
+    if [ -n "$menu_default" ]
+    then
+        entry_num=$(sed -n "${menu_default}p" $menu_lst | sed "s/^\s*default\s*=\{0,1\}\s*\(\S\+\)\s*$/\1/g")
+    else
+        $Info "can not find default boot entry in $menu_lst."
+        return $ERR_NG
+    fi
+
+    ### initialize all variables
+    for var in $var_list
+    do
+        unset $var
+    done
+
+    menu_start=$(sed -n '/^\s*label\s\+/=' "${menu_lst}" | sed -n '1p')
+    if [ -z "$menu_start" ]
+    then
+        menu_start=$(sed -n '$=' $menu_lst)
+        return 0
+    fi
+
+    label_line=$(grep -n "^[[:space:]]*label[[:space:]]\+" $menu_lst | awk -F ":" '{print $1}')
+    for line in $label_line
+    do
+        if [ -n "$begin_line" ]
+        then
+            end_line=$line
+            break
+        fi
+        lable_val=$(sed -n "${line}p" $menu_lst | sed "s/^\s*label\s*=\{0,1\}\s*\(\S\+\)\s*$/\1/g")
+        if [ "$lable_val" = "$entry_num" ]
+        then
+            begin_line=$line
+        fi
+    done
+
+    while [ -z "$(sed -n ${begin_line}s/\^[[:space:]]*$/\1/p $menu_lst)" ]
+    do
+        begin_line=$((begin_line-1))
+    done
+    if [ -z "$end_line" ]
+    then
+        end_line=$(sed -n '$=' "$menu_lst")
+    else
+        while [ -z "$(sed -n ${end_line}s/\^[[:space:]]*$/\1/p $menu_lst)" ]
+        do
+             end_line=$((end_line-1))
+        done
+    fi
+
+    ## get other line of grub entry
+    for ((line_num=$begin_line; line_num<=$end_line; line_num++))
+    do
+        line=$(sed -n "${line_num}p" $menu_lst)
+        if [ -n "$(echo -n "$line" | grep "^[[:space:]]*root[[:space:]]\+")" ] ; then root_line=$line_num ; fi
+        if [ -n "$(echo -n "$line" | grep "^[[:space:]]*append[[:space:]]\+")" ] ; then kernel_line=$line_num ; fi
+        if [ -n "$(echo -n "$line" | grep "^[[:space:]]*initrd[[:space:]]\+")" ] ; then initrd_line=$line_num ; fi
+    done
+
+    return 0
+}
+
+GRUB_ENTRY_TITLE="Linux ${KERN_RELEASE} with PV Driver"
+add_kernel_param()
+{
+    check_disk_driver
+    ide_to_xen_flag=""
+    if [ -n "`uname -r | grep 2.6.26-2`" ]
+    then
+        ide_to_xen_flag="yes"
+    fi
+
+    if [ -n "$MENULIST_CONFIG" ]
+    then
+        cmdline=""
+    elif [ "yes" == "$UEFI_FLAG" ]
+    then
+        info_boot_entry_uefi "$MENULIST" ""
+        if [ -n "${kernel_line}" ]
+        then
+            cmdline=$(sed -n "${kernel_line}p" "$MENULIST" | sed -n 's/^\s*append\s\+\S\+\s*\(.*\)/\1/p')
+        else
+            cmdline=$(cat /proc/cmdline)
+        fi
+    else
+        info_boot_entry "$MENULIST" ""    #仅支持默认启动项
+        if [ -n "${kernel_line}" ]
+        then
+            cmdline=$(sed -n "${kernel_line}p" "$MENULIST" | sed -n 's/^\s*kernel\s\+\S\+\s*\(.*\)/\1/p')
+        else
+            cmdline=$(cat /proc/cmdline)
+        fi
+    fi
+
+    ## check kernel parameter in $MENULIST
+    if [ -f "$LVM_CONF" ]
+    then
+        # scan vg on /dev/xvdx
+        [ -n "$(sed -n '/^\s*types\s*=/p' "$LVM_CONF")" ] && comment_on_line "$LVM_CONF" '1,$' '^\s*types\s*=.*'
+        [ -n "$(sed -n '/^\s*filter\s*=/p' "$LVM_CONF")" ] && comment_on_line "$LVM_CONF" '1,$' '^\s*filter\s*=.*'
+        devices_line=$(sed -n '/^\s*devices\s*{/=' "$LVM_CONF")
+        if [ -z "$devices_line" ]
+        then
+            devices_line=$(sed -n '/^\s*devices\s*/=' "$LVM_CONF")
+            if [ -z "$devices_line" ]
+            then
+                abort "can not find devices information in $LVM_CONF."
+            fi
+            total_line=$(sed -n '$=' "$LVM_CONF")
+            while [ -z "$(sed -n "${devices_line}s/^\s*\({\)/\1/p" $LVM_CONF)" -a ${devices_line} -le ${total_line} ]
+            do
+                devices_line=$((devices_line+1))
+            done
+            if [ ${devices_line} -gt ${total_line} ]
+            then
+                abort "incorrect syntax in $LVM_CONF."
+            fi
+        fi
+        insert_block "$LVM_CONF" "${devices_line}" "\
+        types = [ \"xvd\" , 16 ]
+        filter = [ \"a|.*|\" ]" #syntax highlight"
+
+        if ! $(which_binary 'vgscan') >/dev/null 2>&1
+        then
+            abort "reset volume groups failed."
+        fi
+
+        comment_off_line "$LVM_CONF" ; remove_block "$LVM_CONF"
+    fi
+
+    # check values of root and resume
+    for device in root resume
+    do
+        device_value=$(echo "$cmdline" | sed -n "s/.*${device}=\(\S*\).*/\1/p" | sed 's/^\(LABEL=\|UUID=\).*//g')
+
+        # redhat support label, uuid or lvm now
+        if [ "$SYS_TYPE" = 'redhat' -a -n "$device_value" ] && ! $(which_binary lvdisplay) -c $device_value >/dev/null 2>&1
+        then
+            ide_to_xen_flag="yes"
+        fi
+
+        # support [hs]d,by-id,by-uuid,label,uuid,lvm
+        if [ -z "$device_value" ] \
+            || [ -z "$(echo $device_value | sed 's;^\s*/dev/\(\([hs]\|xv\)d\|disk/\(by-id/\(ata\|scsi\)-\|by-uuid/\)\).*;;g')" ] \
+            || $(which_binary lvdisplay) -c "$device_value" >/dev/null 2>&1
+        then
+            continue
+        else
+            warn "$device=$device_value specified in $MENULIST is not supported."
+            warn "please replace it with [hs]d, by-id, by-uuid, label, uuid or lvm."
+            abort "check kernel parameter failed."
+        fi
+    done
+
+    if [ $SYS_TYPE == "suse" -o $SYS_TYPE == "redhat" ]
+    then
+        nr_ide_dev=1
+    else
+        nr_ide_dev=2
+    fi
+    if [ $(compare_version "$KERN_RELEASE" "2.6.25" ; echo $?) = 1 ]
+    then
+        for ((ide_num=0; ide_num<$nr_ide_dev; ide_num++))
+        do
+            if [ -z "$(echo "${cmdline}" | sed -n "/ide${ide_num}=noprobe/p")" ]
+            then
+                cmdline=$(echo "$cmdline" | sed "s;\(^\|.*\)\(\"\|$\);\1 ide${ide_num}=noprobe\2;g")
+            fi
+        done
+        if [ "${nr_ide_dev}" == "1" ]
+        then
+            if [ -z "$(echo "${cmdline}" | sed -n "/hdc=noprobe/p")" ]
+            then
+                cmdline=$(echo "$cmdline" | sed "s;\(^\|.*\)\(\"\|$\);\1 hdc=noprobe\2;g")
+            fi
+        fi
+    elif [ $(compare_version "$KERN_RELEASE" "3.0" ; echo $?) = 2 ]
+    then
+        if [ -z "$(echo "${cmdline}" | sed -n '/xen_emul_unplug=all/p')" ]
+        then
+            cmdline=$(echo "$cmdline" | sed "s;\(^\|.*\)\(\"\|$\);\1 xen_emul_unplug=all\2;g")
+        fi
+    else
+        for ((ide_num=0; ide_num<$nr_ide_dev; ide_num++))
+        do
+            if [ -z "$(echo "${cmdline}" | sed -n "/ide_core\.noprobe=0\.${ide_num}/p")" ]
+            then
+                cmdline=$(echo "$cmdline" | sed "s;\(^\|.*\)\(\"\|$\);\1 ide_core.noprobe=0.${ide_num}\2;g")
+            fi
+        done
+    fi
+
+    # Ubuntu 10.04/10.10 & Fedora 12 are unsupported USB Storage Devices.
+    UN_USBSTG_OS="$(echo "$LCL_UVP_MODULES_PATH" | awk -F'/' '{print $NF}' | awk -F'-' '{print $NF}')"
+    # RHEL/CentOS 6.0 are unsupported remote ISO9660 Devices.
+    UN_CDROM_OS="$(uname -r | awk -F'.' '{print $3}')"
+    if [ "Ubuntu10" == "$UN_USBSTG_OS" ] || [ "FEDORA12" == "$UN_USBSTG_OS" ] || [ "FEDORA14" == "$UN_USBSTG_OS" ] || [ "32-71" == "$UN_CDROM_OS" ] || [ -n "`uname -r | grep '2.6.31-14'`" ]
+    then
+        SCSI_MOD_PARAM="yes"
+    fi
+    if [ "yes" == "$SCSI_MOD_PARAM" ]
+    then
+        if [ "$emu_bus" = 'scsi' -a -z "$(echo "${cmdline}" | sed -n '/scsi_mod.scan=none/p')" ]
+        then
+            cmdline=$(echo "$cmdline" | sed "s;\(^\|.*\)\(\"\|$\);\1 scsi_mod.scan=none\2;g")
+        fi
+    fi
+
+    if [ "yes" == "$ide_to_xen_flag" ] && [ -n "echo ${cmdline} | grep '=/dev/hd'" ]
+    then
+        cmdline=$(echo "$cmdline" | sed "s;=/dev/hd;=/dev/xvd;g")
+    fi
+
+    cmdline=$(echo "$cmdline" | sed "s/\s\{2,\}/ /g")
+
+    if [ -n "$MENULIST_CONFIG" ]
+    then
+        remove_block "$MENULIST_CONFIG"
+        insert_block "$MENULIST_CONFIG" '$' "GRUB_CMDLINE_LINUX_DEFAULT=\"\$GRUB_CMDLINE_LINUX_DEFAULT $cmdline\""
+
+        #change the default value
+        if [ -n "cat /etc/issue 2>/dev/null | grep Ubuntu" -a -f "$MENULIST_CONFIG" -a -f "$MENULIST" ]; then
+            sed -i "s/$(cat $MENULIST_CONFIG | grep GRUB_DEFAULT)/GRUB_DEFAULT=$(cat $MENULIST | grep -w "set default=" | awk -F"\"" 'NR==1{print $2}')/g" $MENULIST_CONFIG
+        fi
+
+        if [ -n "`cat /etc/issue | grep "Canaima"`" ]
+        then
+            if ! $(which_binary burg-mkconfig) -o "$MENULIST" 2>/dev/null
+            then
+                abort "update $MENULIST failed."
+            fi
+        elif [ -n "`echo "${KERN_RELEASE}" | grep "3.16.6-2\|4.2.3-300\|4.0.4-301"`" ]
+        then
+            if ! $(which_binary grub2-mkconfig) -o "$MENULIST" 2>/dev/null
+            then
+                abort "update $MENULIST failed."
+            fi
+        else
+            if ! $(which_binary grub-mkconfig) -o "$MENULIST" 2>/dev/null
+            then
+                abort "update $MENULIST failed."
+            fi
+        fi
+    elif [ "yes" == "$UEFI_FLAG" ]
+    then
+        info_boot_entry_uefi "$MENULIST" ""
+        if [ -n "${kernel_line}" ]
+        then
+            replace_word "$MENULIST" "${kernel_line}" '^\(\s*append\s\+\S\+\s*\).*' "\1${cmdline}"
+            /sbin/elilo
+        else
+            abort "update kernel parameters failed."
+        fi
+    else
+        # Make sure there is an entry for current kernel
+        info_boot_entry "$MENULIST" ""    #仅支持默认启动项
+        if [ -n "${kernel_line}" ]
+        then
+            replace_word "$MENULIST" "${kernel_line}" '^\(\s*kernel\s\+\S\+\s*\).*' "\1${cmdline}"
+        elif [ "$(which_binary grubby)" != 'none_binary' ]
+        then
+            for kernel in /boot/vmlinu*-${KERN_RELEASE}
+            do
+                grubby --add-kernel="${kernel}" --args="${cmdline}" --initrd="${INITRD_FILE}" --title="${GRUB_ENTRY_TITLE}" \
+                    --grub --make-default
+            done
+        else
+            abort "update kernel parameters failed."
+        fi
+    fi
+
+    return $ERR_OK
+}
+
+remove_kernel_param()
+{
+    cp -f "${MENULIST}" "${MENULIST}.bak"
+
+    check_disk_driver
+    ide_to_xen_flag=""
+    if [ -n "`uname -r | grep 2.6.26-2`" ]
+    then
+        ide_to_xen_flag="yes"
+    fi
+
+    if [ -n "$MENULIST_CONFIG" ]
+    then
+        cmdline=""
+    elif [ "yes" == "$UEFI_FLAG" ]
+    then
+        info_boot_entry_uefi "$MENULIST" ""
+        if [ -n "${kernel_line}" ]
+        then
+            cmdline=$(sed -n "${kernel_line}p" "$MENULIST" | sed -n 's/^\s*append\s\+\S\+\s*\(.*\)/\1/p')
+        else
+            cmdline=$(cat /proc/cmdline)
+        fi
+    else
+        info_boot_entry "$MENULIST" ""    #仅支持默认启动项
+        if [ -n "${kernel_line}" ]
+        then
+            cmdline=$(sed -n "${kernel_line}p" "$MENULIST" | sed -n 's/^\s*kernel\s\+\S\+\s*\(.*\)/\1/p')
+        else
+            cmdline=$(cat /proc/cmdline)
+        fi
+    fi
+
+    ## check kernel parameter in $MENULIST
+    $(which_binary vgscan) >/dev/null 2>&1
+    for device in root resume
+    do
+        device_value=$(echo "$cmdline" | sed -n "s/.*${device}=\(\S*\).*/\1/p" | sed 's/^\(LABEL=\|UUID=\).*//g')
+
+        # redhat support label, uuid or lvm now
+        if [ "$SYS_TYPE" = 'redhat' -a -n "$device_value" ] && ! $(which_binary lvdisplay) -c $device_value >/dev/null 2>&1
+        then
+            ide_to_xen_flag="yes"
+            continue
+        fi
+
+        # support [hs]d,by-id,by-uuid,label,uuid,lvm
+        if [ -z "$device_value" ] \
+            || [ -z "$(echo $device_value | sed 's;^\s*/dev/\(\([hs]\|xv\)d\|disk/\(by-id/\(ata\|scsi\)-\|by-uuid/\)\).*;;g')" ] \
+            || $(which_binary lvdisplay) -c "$device_value" >/dev/null 2>&1
+        then
+            continue
+        else
+            warn "$device=$device_value specified in $MENULIST is not supported."
+            warn "please replace it with [hs]d, by-id, by-uuid, label, uuid or lvm."
+        fi
+    done
+
+    for ((ide_num=0; ide_num<1; ide_num++))
+    do
+          cmdline=$(echo "$cmdline" | sed "s;\s*ide${ide_num}=noprobe\s*; ;g")
+    done
+    cmdline=$(echo "$cmdline" | sed "s;\s*hdc=noprobe\s*; ;g")
+    cmdline=$(echo "$cmdline" | sed "s;\s*xen_emul_unplug=all\s*; ;g")
+    for ((ide_num=0; ide_num<2; ide_num++))
+    do
+          cmdline=$(echo "$cmdline" | sed "s;\s*ide_core\.noprobe=0\.${ide_num}\s*; ;g")
+    done
+    cmdline=$(echo "$cmdline" | sed "s;\s*scsi_mod.scan=none\s*; ;g")
+    cmdline=$(echo "$cmdline" | sed "s/\s\{2,\}/ /g")
+
+    if [ "yes" == "$ide_to_xen_flag" ] && [ -n "echo ${cmdline} | grep '=/dev/xvd'" ]
+    then
+        cmdline=$(echo "$cmdline" | sed "s;=/dev/xvd;=/dev/hd;g")
+    fi
+
+    if [ -n "$MENULIST_CONFIG" ]
+    then
+        remove_block "$MENULIST_CONFIG"
+
+        #change the default value
+        if [ -n "cat /etc/issue 2>/dev/null | grep Ubuntu" -a -f "$MENULIST_CONFIG" -a -f "$MENULIST" ]; then
+            sed -i "s/$(cat $MENULIST_CONFIG | grep GRUB_DEFAULT)/GRUB_DEFAULT=$(cat $MENULIST | grep -w "set default=" | awk -F"\"" 'NR==1{print $2}')/g" $MENULIST_CONFIG
+        fi
+
+        if [ -n "`cat /etc/issue | grep "Canaima"`" ]
+        then
+            if ! burg-mkconfig -o "$MENULIST" 2>/dev/null
+            then
+                abort "update $MENULIST failed."
+            fi
+        elif [ -n "`echo "${KERN_RELEASE}" | grep "3.16.6-2\|4.2.3-300\|4.0.4-301"`" ]
+        then
+            if ! grub2-mkconfig -o "$MENULIST" 2>/dev/null
+            then
+                abort "update $MENULIST failed."
+            fi
+        else
+            if ! grub-mkconfig -o "$MENULIST" 2>/dev/null
+            then
+                abort "update $MENULIST failed."
+            fi
+        fi
+    elif [ "yes" == "$UEFI_FLAG" ]
+    then
+        info_boot_entry_uefi "$MENULIST" ""
+        if [ -n "${kernel_line}" ]
+        then
+            replace_word "$MENULIST" "${kernel_line}" '^\(\s*append\s\+\S\+\s*\).*' "\1${cmdline}"
+            /sbin/elilo
+        else
+            abort "update kernel parameters failed."
+        fi
+    else
+        info_boot_entry "$MENULIST" ""
+        if [ -n "${kernel_line}" ]
+        then
+            replace_word "$MENULIST" "${kernel_line}" '^\(\s*kernel\s\+\S\+\s*\).*' "\1${cmdline}"
+        elif [ "$(which_binary grubby)" != 'none_binary' ]
+        then
+            for kernel in /boot/vmlinu*-${KERN_RELEASE}
+            do
+                grubby --add-kernel="${kernel}" --args="${cmdline}" --initrd="${INITRD_FILE}" --title="Linux (${KERN_RELEASE})" \
+                    --grub --make-default
+            done
+        else
+            abort "update kernel parameters failed."
+        fi
+    fi
+    return $ERR_OK
+}
+
+change_blkdev()
+{
+    ###LVM2 supports ide, sd ...
+    if [ ! -f "$LVM_CONF" ]
+    then
+        return 0
+    fi
+
+    ### get HV disk driver type
+    check_disk_driver
+    case $emu_bus in
+    scsi)
+        lvm_blkdev_type='sd'
+        lvm_blkdev_name='sd'
+        ;;
+    ata)
+        lvm_blkdev_type='ide'
+        lvm_blkdev_name='hd'
+        ;;
+    esac
+
+    ### clean lvm configuration
+    comment_off_line "$LVM_CONF" ; remove_block "$LVM_CONF"
+
+    ### get line of devices information
+    devices_line=$(sed -n '/^\s*devices\s*{/=' "$LVM_CONF")
+    if [ -z "$devices_line" ]
+    then
+        devices_line=$(sed -n '/^\s*devices\s*/=' "$LVM_CONF")
+        if [ -z "$devices_line" ]
+        then
+            abort "can not find devices information in $LVM_CONF."
+        fi
+        total_line=$(sed -n '$=' "$LVM_CONF")
+        while [ -z "$(sed -n "${devices_line}s/^\s*\({\)/\1/p" $LVM_CONF)" -a ${devices_line} -le ${total_line} ]
+        do
+            devices_line=$((devices_line+1))
+        done
+        if [ ${devices_line} -gt ${total_line} ]
+        then
+            abort "incorrect syntax in $LVM_CONF."
+        fi
+    fi
+
+    ### force relocate vg on /dev/[hs]dx
+    [ -n "$(sed -n '/^\s*types\s*=/p' $LVM_CONF)" ] && comment_on_line "$LVM_CONF" '1,$' '^\s*types\s*=.*'
+    [ -n "$(sed -n '/^\s*filter\s*=/p' $LVM_CONF)" ] && comment_on_line "$LVM_CONF" '1,$' '^\s*filter\s*=.*'
+
+    insert_block "$LVM_CONF" "${devices_line}" "\
+    types = [ \"${lvm_blkdev_type}\" , 16 ]
+    filter = [ \"a|/dev/${lvm_blkdev_name}.*|\", \"r|/dev/xvd.*|\" ]" #syntax highlight"
+
+    if ! $(which_binary 'vgscan') >/dev/null 2>&1
+    then
+        abort "reset volume groups failed."
+    fi
+
+    comment_off_line "$LVM_CONF" ; remove_block "$LVM_CONF"
+
+    ### locate vg on /dev/xvdx
+    [ -n "$(sed -n '/^\s*types\s*=/p' $LVM_CONF)" ] && comment_on_line "$LVM_CONF" '1,$' '^\s*types\s*=.*'
+    [ -n "$(sed -n '/^\s*filter\s*=/p' $LVM_CONF)" ] && comment_on_line "$LVM_CONF" '1,$' '^\s*filter\s*=.*'
+
+    insert_block "$LVM_CONF" "${devices_line}" "\
+    types = [ \"xvd\" , 16 ]
+    filter = [ \"r|/dev/.*/by-path/.*|\", \"r|/dev/.*/by-id/.*|\", \"a/.*/\" ]" #syntax highlight"
+}
+
+restore_blkdev()
+{
+    #LVM2 supports ide, sd ...
+    if [ ! -f "$LVM_CONF" ]
+    then
+        return 0
+    fi
+
+    ### get HV disk driver type
+    check_disk_driver
+    case $emu_bus in
+    scsi)
+        lvm_blkdev_type='sd'
+        lvm_blkdev_name='sd'
+        ;;
+    ata)
+        lvm_blkdev_type='ide'
+        lvm_blkdev_name='hd'
+        ;;
+    esac
+
+    ### clean lvm configuration
+    comment_off_line "$LVM_CONF" ; remove_block "$LVM_CONF"
+
+    return 0
+
+    ### get line of devices information
+    devices_line=$(sed -n '/^\s*devices\s*{/=' "$LVM_CONF")
+    if [ -z "$devices_line" ]
+    then
+        devices_line=$(sed -n '/^\s*devices\s*/=' "$LVM_CONF")
+        if [ -z "$devices_line" ]
+        then
+            abort "can not find devices information in $LVM_CONF."
+        fi
+        total_line=$(sed -n '$=' "$LVM_CONF")
+        while [ -z "$(sed -n "${devices_line}s/^\s*\({\)/\1/p" $LVM_CONF)" -a ${devices_line} -le ${total_line} ]
+        do
+            devices_line=$((devices_line+1))
+        done
+        if [ ${devices_line} -gt ${total_line} ]
+        then
+            abort "incorrect syntax in $LVM_CONF."
+        fi
+    fi
+
+    ### locate vg on /dev/[hs]dx
+    if [ -z "$(sed -n '/^\s*types\s*=/p' $LVM_CONF)" ]
+    then
+        insert_block "$LVM_CONF" "${devices_line}" "    types = [ \"${lvm_blkdev_type}\" , 16 ]"
+    fi
+}
+
+clean_blkdev_cache()
+{
+    ## check blkid.tab
+    local blkid_cache=''
+    if [ -f "/etc/blkid.tab" ]
+    then
+        blkid_cache="/etc/blkid.tab"
+    elif [ -f "/etc/blkid/blkid.tab" ]
+    then
+        blkid_cache="/etc/blkid/blkid.tab"
+    else
+        blkid_cache=$(blkid -h | sed -n '/^\s*-c\s/s/.*default:\s*\([./0-9a-zA-Z]*\).*/\1/p')
+    fi
+
+    ## check lvm cache
+    local lvm_cache='/etc/lvm/cache/.cache /etc/lvm/.cache'
+
+    ## cleanup all cache
+    for cache in $blkid_cache $lvm_cache
+    do
+        rm -f "$cache" >/dev/null 2>&1
+    done
+}
+
+ChangeConfig()
+{
+    echo "  change system configurations."
+
+    ##
+    if [ -f "$MODPROBE_UNSUPPORTED_MODULES" ]
+    then
+        comment_on_line "$MODPROBE_UNSUPPORTED_MODULES" '1,$' '^\s*allow_unsupported_modules\s\+[0-9]\+\s*'
+        insert_block "$MODPROBE_UNSUPPORTED_MODULES" '$' 'allow_unsupported_modules 1'
+    fi
+
+    ## modify udev network rules for suse11, etc.
+    if [ -f "$NET_GENERATOR_RULES" ]
+    then
+        comment_on_line "$NET_GENERATOR_RULES" '1,$' '^SUBSYSTEMS=="xen",\s*GOTO=.*'
+    fi
+
+    ### xen-procfs means pvops kernel
+    if [ -d "$UVP_MODULES_PATH" -a -n "$(find "$UVP_MODULES_PATH" -type f -name 'xen-procfs.ko')" ] || [ "$kernel_param_flag" = "1" ] || [ "$NO_PROCFS" = "true" ]
+    then
+        return 0
+    fi
+
+    ### change hv to pv
+    if ! add_kernel_param
+    then
+        abort "add_kernel_param failed"
+    fi
+
+    if ! change_blkdev
+    then
+        abort "change_blkdev failed"
+    fi
+
+    if ! change_mkinitrd
+    then
+        abort "change_mkinitrd failed"
+    fi
+}
+
+RestoreConfig()
+{
+    echo "  restore system configurations."
+
+    ##
+    if [ -f "$MODPROBE_UNSUPPORTED_MODULES" ]
+    then
+        comment_off_line "$MODPROBE_UNSUPPORTED_MODULES"
+        remove_block "$MODPROBE_UNSUPPORTED_MODULES"
+    fi
+    ## modify udev network rules for suse11, etc.
+    if [ -f "$NET_GENERATOR_RULES" ]
+    then
+        comment_off_line "$NET_GENERATOR_RULES"
+    fi
+
+    ### xen-procfs means pvops kernel
+    if [ -d "$UVP_MODULES_PATH" -a -n "$(find "$UVP_MODULES_PATH" -type f -name 'xen-procfs.ko')" ] || [ "$kernel_param_flag" = "1" ] || [ "$NO_PROCFS" = "true" ]
+    then
+        return 0
+    fi
+
+    ### change hv to pv
+    if ! remove_kernel_param
+    then
+        abort "remove_kernel_param failed"
+    fi
+
+    if ! restore_blkdev
+    then
+        abort "restore_blkdev failed"
+    fi
+
+    ###
+    if ! restore_mkinitrd
+    then
+        abort "restore_mkinitrd failed"
+    fi
+}
+
+Install()
+{
+    cd "$INSTALLER_DIR"
+    $Info "Execute Installation"
+    echo "Start Installation :"
+    mkdir -p $INSTALL_PATH
+    mkdir -p $WORKDIR
+
+    ## install version.ini and uninstall
+
+    rm -f "$INSTALL_PATH/install"
+    if ! (cp -f "$0" "$INSTALL_PATH/uninstall" && ln -s "$INSTALL_PATH/uninstall" "$INSTALL_PATH/install"  && chmod -R 755 "$INSTALL_PATH/uninstall")
+    then
+        abort "install $INSTALL_PATH/uninstall failed"
+    fi
+
+    ## install GuestOSFeature Files
+    InstallFeatureFile
+
+    ## install drivers
+    InstallModules
+    ### ubuntu14.04.3 and debian8.2 and Fedora23 no procfs
+    if [ -d "$UVP_MODULES_PATH" -a -n "$(find "$UVP_MODULES_PATH" -type f -name 'xen-procfs.ko')" ] || [ "$NO_PROCFS" = "true" ]
+    then
+        EnableArpNotifySetting
+    fi
+    
+    install -m755 ${LCL_UVP_ARPING} ${UVP_ARPING}
+
+    if ! (cp -f "${LCL_XENVNET_ARP}" "${XENVNET_ARP}" && chmod 755 "${XENVNET_ARP}")
+    then
+        $Info "install ${XENVNET_ARP} failed"
+        abort "install ${XENVNET_ARP} failed"
+    fi
+
+    install -m755 ${LCL_UVP_NDSEND} ${UVP_NDSEND}
+    if ! (cp -f "${LCL_XENVNET_ARP}" "${XENVNET_ARP}" && chmod 755 "${XENVNET_ARP}")
+    then
+        $Info "install ${XENVNET_ARP} failed"
+        abort "install ${XENVNET_ARP} failed"
+    fi
+
+    ## hide suspend/hibernate
+    if [ -e "$SUSPEND_PATH" ]
+    then
+        chmod a-x "$SUSPEND_PATH"
+    fi
+
+    if [ -e "$HIBERNATE_PATH" ]
+    then
+        chmod a-x "$HIBERNATE_PATH"
+    fi
+    #install unplug shell script
+    cp -a ${INSTALLER_DIR}/bin/pvumount.sh /usr/bin/pvumount.sh
+    chmod 755 /usr/bin/pvumount.sh
+
+    ChangeConfig
+
+    return 0
+}
+
+Uninstall()
+{
+    cd "$INSTALLER_DIR"
+    $Info "Execute Uninstallation"
+    echo "Start Uninstallation :"
+    mkdir -p $WORKDIR
+
+    ## remove services and drivers
+    ### ubuntu14.04.3 and debian8.2 and Fedora23 no procfs
+    if [ -d "$UVP_MODULES_PATH" -a -n "$(find "$UVP_MODULES_PATH" -type f -name 'xen-procfs.ko')" ] || [ "$NO_PROCFS" = "true" ]
+    then
+        RestoreArpNotifySetting
+    fi
+    RestoreConfig
+    UninstallFeatureFile
+    UninstallServices
+    UninstallModules
+
+    ## delete uninstall and version.ini
+    rm -f "$INSTALL_PATH/install" "$INSTALL_PATH/uninstall"
+    rm -f "$INSTALL_PATH/version.ini"
+    return 0
+}
+
+###############################################################################
+# main entrance
+###############################################################################
+make_initrd()
+{
+    local binary=""
+    local options=""
+    local image=""
+    local kernel=""
+
+    if [ -f '/etc/initramfs-tools/modules' ]
+    then
+        binary=$(which_binary update-initramfs)
+        if [ "$binary" = 'none_binary' ]
+        then
+            $Info "can not find update-initramfs."
+            return 1
+        fi
+
+        options="-u"
+        kernel="-k $KERN_RELEASE"
+    elif [ -f '/etc/dracut.conf' ] && [ "$kernel_param_flag" = "0" ]
+    then
+        binary=$(which_binary dracut)
+        if [ "$binary" = 'none_binary' ]
+        then
+            $Info "can not find dracut."
+            return 1
+        fi
+        options="--force"
+        image="$INITRD_FILE.uvptmp"
+    elif [ -f "/sbin/mkinitrd" ]
+    then
+        binary=$(which_binary mkinitrd)
+        if [ "$binary" = 'none_binary' ]
+        then
+            $Info "can not find mkinitrd."
+            return 1
+        fi
+        if [ -n "$(mkinitrd --help 2>&1 | sed -n '/--with=/p')" ]
+        then
+            options="-f"
+            image="$INITRD_FILE.uvptmp"
+            if [ "el5uek" == "$(uname -r | awk -F"." '{print $6}')" ]
+            then
+                kernel="$KERN_RELEASE --builtin=ehci-hcd --builtin=ohci-hcd --builtin=uhci-hcd --with=xen-blkfront --with=xen-netfront"
+            else
+                kernel="$KERN_RELEASE"
+            fi
+            for disk in `ls /sys/block/| grep sd`
+            do
+                isscsi=`ls -l /sys/block/${disk}/device/driver | grep scsi`
+                if test "x${isscsi}" != x
+                then
+                    kernel="$KERN_RELEASE --allow-missing"
+                    break
+                fi
+            done
+        else
+            options=''
+            image=''
+            kernel="-k vmlinuz-$KERN_RELEASE -i initrd-$KERN_RELEASE"
+        fi
+    else
+        return 1
+    fi
+
+    if [ "$kernel_param_flag" = "1" ]
+    then
+        true
+    elif [ "$INSTALL_ACTION" = "install" -o "$INSTALL_ACTION" = "upgrade" ] && [ -f "/lib/modules/`uname -r`/kernel/drivers/scsi/sym53c8xx_2/sym53c8xx.ko" ]
+    then
+        mv /lib/modules/`uname -r`/kernel/drivers/scsi/sym53c8xx_2/sym53c8xx.ko /lib/modules/`uname -r`/kernel/drivers/scsi/sym53c8xx_2/.sym53c8xx.ko.bak
+    elif [ "$INSTALL_ACTION" == "uninstall" ] && [ -f "/lib/modules/`uname -r`/kernel/drivers/scsi/sym53c8xx_2/.sym53c8xx.ko.bak" ]
+    then
+        mv /lib/modules/`uname -r`/kernel/drivers/scsi/sym53c8xx_2/.sym53c8xx.ko.bak /lib/modules/`uname -r`/kernel/drivers/scsi/sym53c8xx_2/sym53c8xx.ko
+    fi
+
+    depmod -a
+    if [ -f "/etc/sysconfig/kdump" ] # update initrd for kdump
+    then
+        touch /etc/sysconfig/kdump
+    fi
+
+    $binary $options $image $kernel >/dev/null 2>&1
+    ret=$?
+    if [ "${ret}" = "0" -a -f "$INITRD_FILE.uvptmp" ]
+    then
+        mv -f $INITRD_FILE.uvptmp $INITRD_FILE
+    fi
+
+    return ${ret}
+}
+
+# enter critical section
+EnterCriticalSection()
+{
+    $Info "EnterCriticalSection: INSTALL_VERSION=$INSTALL_VERSION"
+    trap "cancel" INT TERM QUIT HUP
+    ### lock installation
+    if [ $CUR_INSTALL_LEVEL = 1 ]
+    then
+        if ! lock_install
+        then
+            $Info "Lock installation failed."
+            exit 1
+        fi
+    fi
+
+    if [ "$kernel_param_flag" = "1" ]
+    then
+        MKINITRD=$(which_binary mkinitrd)
+        INITRD_FILE="/boot/initrd-${KERN_RELEASE}"
+        MODPROBE_UNSUPPORTED_MODULES=$(readlink -f '/etc/modprobe.d/10-unsupported-modules.conf')
+        NET_GENERATOR_RULES=$(readlink -f '/lib/udev/rules.d/75-persistent-net-generator.rules')
+    elif [ ! "$SYS_TYPE" = "gentoo" ]
+    then
+        if ! init_backup
+        then
+            $Info "init_backup failed."
+            abort "init_backup failed."
+        fi
+    else
+        NET_GENERATOR_RULES=$(readlink -f '/lib/udev/rules.d/75-persistent-net-generator.rules')
+    fi
+
+    if ! backup_all_files
+    then
+        $Info "Backup all files failed."
+        abort "Backup all files failed."
+    fi
+
+    if [ $BAK_INSTALL_LEVEL -le 0 -o 3 -le $BAK_INSTALL_LEVEL ]
+    then
+        echo "FATLE ERROR: CUR_INSTALL_LEVEL=$CUR_INSTALL_LEVEL,BAK_INSTALL_LEVEL=$BAK_INSTALL_LEVEL."
+        abort "FATLE ERROR: CUR_INSTALL_LEVEL=$CUR_INSTALL_LEVEL,BAK_INSTALL_LEVEL=$BAK_INSTALL_LEVEL."
+    fi
+}
+
+# leave critical section
+LeaveCriticalSection()
+{
+    $Info "LeaveCriticalSection: INSTALL_VERSION=$INSTALL_VERSION"
+    local ret_val=0
+    local rebootflag=1
+    if ! clean_all_files
+    then
+        $Info "Clean all files failed."
+    fi
+
+    trap "" INT TERM QUIT HUP
+
+    if [ $CUR_INSTALL_LEVEL = 1 ]
+    then
+        ##
+        install_action=$INSTALL_ACTION
+        if [ "$install_action" = 'upgrade_uvpmonitor' ]
+        then
+            unlock_install
+            InstallServices
+            sync ; sync ; sync
+            ret_val=$UVPMONITOR_OK
+        else
+            if [ "$SYS_TYPE" = "gentoo" ]
+            then
+                test "$install_action" = 'upgrade' && install_action='install'
+                if [ "$install_action" = "upgrade_hcall" ]
+                then 
+                    install_action='install'
+                    rebootflag=0
+                fi
+                if [ "$INSTALL_ACTION" != "uninstall" ]
+                then
+                    InstallServices
+                fi
+                sync ; sync ; sync
+                
+                if [ "${rebootflag}" = "1" ]
+                then
+                    echo "The PV driver is ${install_action}ed successfully."
+                    echo "Reboot the system for the installation to take effect."
+                fi
+                rmdir $INSTALL_PATH 1>/dev/null 2>&1
+                unlock_install
+                sync
+                rm -fr $WORKDIR
+                if [ "${rebootflag}" = "1" ]
+                then
+                    return $ERR_OK
+                else
+                    ret_val=$UVPMONITOR_OK
+                fi
+            fi
+
+            test "$install_action" = 'upgrade' && install_action='install'
+            if [ "$install_action" = "upgrade_hcall" ]
+            then 
+                install_action='install'
+                rebootflag=0
+            fi
+            echo "  Update kernel initrd image."
+            sync ; sync ; sync   # make sure that all files saved
+
+        ##
+        if [ -n "`uname -r | grep 2.6.18-SKL1.9.4.ky3.173.4.1`" ]; then
+            remove_block_line_by_line "/etc/modprobe.conf" "ata_piix"
+        fi
+
+        if [ ! -f "$INITRD_FILE.uvpbak" ]
+        then
+            BACKUP_INITRD="cp -f $INITRD_FILE $INITRD_FILE.uvpbak"
+        else
+            BACKUP_INITRD=':'
+        fi
+        if ($BACKUP_INITRD && make_initrd)
+        then
+            $Info "make_initrd success"
+            ret_val=$ERR_OK
+            if [ "$INSTALL_ACTION" != "uninstall" ]
+            then
+                InstallServices
+            elif [ "$INSTALL_ACTION" = "uninstall" ]
+            then
+                remove_block  "$MKINITRD_CONFIG"
+            fi
+            if [ "${rebootflag}" = "1" ]
+            then
+                echo "The PV driver is ${install_action}ed successfully."
+                echo "Reboot the system for the installation to take effect."
+            fi
+        else
+            warn "make initrd failed, please do not reboot and remake it by yourself."
+            echo "The PV driver ${install_action}ation failed."
+            $Info "make_initrd failed"
+            ret_val=$ERR_INITRD
+        fi
+        rmdir $INSTALL_PATH 1>/dev/null 2>&1
+        if [ "$kernel_param_flag" = "0" ]
+        then
+            clean_blkdev_cache
+        fi
+        unlock_install
+        sync
+        fi
+        if [ "${rebootflag}" = "0" ]
+        then 
+            ret_val=$UVPMONITOR_OK
+        fi
+    else
+        ret_val=$ERR_OK
+    fi
+    rm -fr $WORKDIR
+    return $ret_val
+}
+
+Confirm()
+{
+    echo -n "$1"
+    echo -n "OK [Y/n]?"
+    read ANSWER
+    if [ "$ANSWER" == "y" ] || [ "$ANSWER" == "Y" ] || [ -z "$ANSWER" ]
+    then
+        eval $1
+        echo "... parameter set"
+    else
+        echo "... parameter NOT set"
+    fi
+}
+
+CheckVersion()
+{
+    if [ ! -f "${INSTALL_PATH}/version.ini" ]
+    then
+        return 1
+    fi
+
+    ### check pvdriver version
+    pvdriverVersion=$(. "${INSTALL_PATH}/version.ini" ; echo "$pvdriverVersion")
+    kernelVersion=$(. "${INSTALL_PATH}/version.ini" ; echo "$kernelVersion")
+
+    [ -z "$pvdriverVersion" ] && pvdriverVersion='0'
+    [ -z "$kernelVersion" ] && kernelVersion="$KERN_RELEASE"  #compatible with legacy pvdriver
+
+    if [ "$FORCE_INSTALL" != 'true' -a $(compare_version "$INSTALL_VERSION" "$pvdriverVersion" ; echo $?) = 1 ]
+    then
+        abort "can not upgrade pvdriver from ${pvdriverVersion} to ${INSTALL_VERSION}."
+    fi
+ 
+    if [ "$kernelVersion" != "$KERN_RELEASE" -a "$FORCE_INSTALL" != 'true' ]
+    then
+        abort "Please boot kernel $kernelVersion and $INSTALL_ACTION again."
+    fi
+    return 0
+}
+
+showhelp()
+{
+    echo "\
+Usage: $0 [-f]
+Options:
+    -f         force to downgrade pvdriver.
+    -o         offline to copy driver.
+"
+}
+##added on 2013-6-20
+##single upgrade uvpmonitor function
+upgrade_uvpmonitor()
+{
+   echo "upgrading uvpmonitor services.."
+   mkdir -p ${WORKDIR}
+   if ! ( rm -f ${INSTALL_PATH}/version.ini )
+   then
+       abort "remove version.ini failed"
+   fi
+   if ! (cp -f "${LCL_UVP_MONITOR}" "${UVP_MONITOR}" && chmod 755 "${UVP_MONITOR}")
+   then
+       $Info "install ${UVP_MONITOR} failed"
+       abort "install ${UVP_MONITOR} failed"
+   fi
+   if ! cat > "$INSTALL_PATH/version.ini" << EOF
+pvdriverVersion=${INSTALL_VERSION}
+DriverVersion=${DRIVER_VERSION}
+kernelVersion="${KERN_RELEASE}"
+EOF
+   then
+       abort "install $INSTALL_PATH/version.ini failed"
+   fi
+   if ! (cp -f "$0" "$INSTALL_PATH/uninstall" && ln -s "$INSTALL_PATH/uninstall" "$INSTALL_PATH/install" && chmod -R 755 "$INSTALL_PATH/uninstall")
+    then
+        abort "update $INSTALL_PATH/uninstall failed"
+    fi
+
+   return 0
+}
+###added end
+
+### parse options
+INSTALL_ACTION='none'
+OTHER_FUNC='none'
+FORCE_INSTALL='false'
+AUTO_UPGRADE='false'
+while getopts "iusrdfho" option
+do
+    case $option in
+    i) # compatible with "install -i"
+        if [ "$INSTALLER" != "install" ]
+        then
+            echo "$INSTALLER do not support -i option."
+            exit 1
+        fi
+        AUTO_UPGRADE='true'
+        FORCE_INSTALL='true'
+        INSTALLER='install'
+        UNINSTALLER='install'
+        ;;
+    u) # compatible with "install -u"
+        if [ "$INSTALLER" != "install" ]
+        then
+            echo "$INSTALLER do not support -u option."
+            exit 1
+        fi
+        AUTO_UPGRADE='true'
+        FORCE_INSTALL='true'
+        INSTALLER='uninstall'
+        UNINSTALLER='install'
+        ;;
+    f)
+        FORCE_INSTALL='true'
+        ;;
+    s)
+        OTHER_FUNC="service"
+        if [ "$INSTALLER" = "install" ]
+        then
+            AUTO_UPGRADE='true'
+        fi
+        INSTALLER='uninstall'
+        ;;
+    r)
+        OTHER_FUNC="restore"
+        if [ "$INSTALLER" = "install" ]
+        then
+            AUTO_UPGRADE='true'
+        fi
+        INSTALLER='uninstall'
+        ;;
+    d)
+        OTHER_FUNC="dep_tools"
+        ;;
+    o)
+        OTHER_FUNC="offline"
+        ./bin/offline/offline_copy_uvp_module
+        exit $?
+        ;;
+    *)
+        showhelp
+        exit 1
+        ;;
+    esac
+done
+
+if [ "$INSTALLER" = "install" -a "$INSTALLER_DIR" = "$INSTALL_PATH" ] || [ "$INSTALLER" = "uninstall" -a "$INSTALLER_DIR" != "$INSTALL_PATH" ]
+then
+    $Info "you can not run ${INSTALLER}ation in $INSTALLER_DIR"
+    echo "you can not run ${INSTALLER}ation in $INSTALLER_DIR"
+    exit 1
+fi
+
+### check system
+InitSystemInfo
+InitPackageInfo
+check_block "/etc/sysconfig/kernel"
+upgrade_uvpmonitor_flag="0"
+if [ "${INSTALLER}" = "install" ]
+then
+    LCL_UVP_XENPCI_PATH=$LCL_UVP_MODULES_PATH/xen-platform-pci/xen-platform-pci.ko
+    LCL_UVP_XENVIF_PATH=$LCL_UVP_MODULES_PATH/xen-vnif/xen-netfront.ko
+    LCL_UVP_XENHCALL_PATH=$LCL_UVP_MODULES_PATH/xen-hcall/xen-hcall.ko
+    LCL_UVP_XENPROCFS_PATH=$LCL_UVP_MODULES_PATH/xen-procfs/xen-procfs.ko
+    if [ -f ${LCL_UVP_XENPCI_PATH} ]
+    then
+        XenpciVer="$(echo $(modinfo ${LCL_UVP_XENPCI_PATH} | grep -w version | awk -F":" '{print $2}'))"
+        DRIVER_VERSION="${XenpciVer}"
+    elif [ -f ${LCL_UVP_XENVIF_PATH} ]
+    then
+        XenVifVer="$(echo $(modinfo ${LCL_UVP_XENVIF_PATH} | grep -w version | awk -F":" '{print $2}'))"
+        DRIVER_VERSION="${XenVifVer}"
+    elif [ -f ${LCL_UVP_XENPROCFS_PATH} ]
+    then
+        XenProcfsVer="$(echo $(modinfo ${LCL_UVP_XENPROCFS_PATH} | grep -w version | awk -F":" '{print $2}'))"
+        DRIVER_VERSION="${XenProcfsVer}"
+    fi
+    if [ -f ${LCL_UVP_XENHCALL_PATH} ]
+    then
+        XenhcallVer="$(echo $(modinfo ${LCL_UVP_XENHCALL_PATH} | grep -w version | awk -F":" '{print $2}'))"
+        USERDRI_VERSION="$XenhcallVer"
+        if [ "X${DRIVER_VERSION}" = "X" ]
+        then
+            DRIVER_VERSION="2.2.0.202"
+        fi
+    fi
+
+    upgrade_hcall_flag="0"
+    if [ -f "${INSTALL_PATH}/version.ini" ]
+    then
+        DRIVERINFO_TMP="`cat ${INSTALL_PATH}/version.ini | grep -w "DriverVersion"`"
+        if [ -n "${DRIVERINFO_TMP}" ]
+        then
+            DRIVERINFO_TMP=$(. "${INSTALL_PATH}/version.ini" ; echo ${DriverVersion} )
+            OldPvdriverVersion_TMP=$(. "${INSTALL_PATH}/version.ini" ; echo ${pvdriverVersion} )
+            CurRunVersion_TMP=`cat $UPGRADE_VERSION 2>/dev/null`
+            LastRunversion_TMP=`cat $LAST_VERSION 2>/dev/null`
+            UserDriINFO_TMP="`cat ${INSTALL_PATH}/version.ini | grep -w "UserDriVer"`"
+            if [ -n "${UserDriINFO_TMP}" ]
+            then
+                UserDriINFO_TMP=$(. "${INSTALL_PATH}/version.ini" ; echo ${UserDriVer} )
+            fi
+            if [ "${DRIVERINFO_TMP}" = "${DRIVER_VERSION}" ]
+            then
+                if [ "X" = "X${UserDriINFO_TMP}" ] || [ $(compare_version "$USERDRI_VERSION" "$UserDriINFO_TMP" ; echo $?) != 0 ]
+                then
+                    upgrade_hcall_flag="1"
+                else
+                    upgrade_uvpmonitor_flag="1"
+                fi
+            fi
+        fi
+    fi
+fi
+
+### check /boot and /var/tmp size
+if [ "$upgrade_uvpmonitor_flag" = "0" ]
+then
+
+    if [ -f "/boot/initramfs-${KERN_RELEASE}.img" ]; then
+        initrd_size=$(du -sk "/boot/initramfs-${KERN_RELEASE}.img" | awk -F " " '{print $1}')
+        BOOT_MIN_SIZE=$((initrd_size+BOOT_FREE_SPACE))
+    elif [ -f "/boot/initrd.img-${KERN_RELEASE}" ]; then
+        initrd_size=$(du -sk "/boot/initrd.img-${KERN_RELEASE}" | awk -F " " '{print $1}')
+        BOOT_MIN_SIZE=$((initrd_size+BOOT_FREE_SPACE))
+    elif [ -f "/boot/initrd-${KERN_RELEASE}" ]; then
+        initrd_size=$(du -sk "/boot/initrd-${KERN_RELEASE}" | awk -F " " '{print $1}')
+        BOOT_MIN_SIZE=$((initrd_size+BOOT_FREE_SPACE))
+    elif [ -f "/boot/initrd-${KERN_RELEASE}.img" ]; then
+        initrd_size=$(du -sk "/boot/initrd-${KERN_RELEASE}.img" | awk -F " " '{print $1}')
+        BOOT_MIN_SIZE=$((initrd_size+BOOT_FREE_SPACE))
+    elif [ -f "/etc/gentoo-release" ]; then
+        BOOT_MIN_SIZE=$((0+BOOT_FREE_SPACE))
+    else
+        $Info "Can not find initrd file in /boot, Please check."
+        echo "Can not find initrd file in /boot, Please check."
+        exit 1
+    fi
+    
+    uvp_bak_file=$(ls /boot/ | grep "uvpbak$")
+    if [ ! -z "${uvp_bak_file}" ]; then
+        BOOT_MIN_SIZE=${BOOT_FREE_SPACE}
+    fi
+    
+    boot_size=$(df -k /boot | grep "[0-9]%" | sed "s/%.*//" | awk '{print $(NF-1)}')
+    if [ -f "/etc/gentoo-release" ]; then
+        $Info "Gentoo has no initrd."
+    elif [ "${boot_size}" -lt "${BOOT_MIN_SIZE}" ]; then
+        $Info "The /boot disk space is not enough to install/uninstall."
+        echo "The /boot disk space is not enough to install/uninstall."
+        exit 1
+    fi
+    
+    tmp_size=$(df -k /var/tmp | grep "[0-9]%" | sed "s/%.*//" | awk '{print $(NF-1)}')
+    tmp_min_size=$(($initrd_size*$INITRD_RATIO))
+    if [ -f "/etc/gentoo-release" ]; then
+        $Info "Gentoo has no initrd."
+    elif [ "${tmp_size}" -lt "${tmp_min_size}" ]; then
+        $Info "The /var/tmp disk space is not enough to change initrd or initramfs."
+        echo "The /var/tmp disk space is not enough to change initrd or initramfs."
+        exit 1
+    fi
+fi
+
+if [ -e '/etc/SuSE-release' -a -n "`cat /etc/SuSE-release 2>/dev/null | grep 'VERSION' | grep '12'`" ]
+then
+    kernel_param_flag="1"
+fi
+
+$Info "Run $INSTALLER: SYS_TYPE=$SYS_TYPE, KERN_RELEASE=$KERN_RELEASE, CPU_ARCH=$CPU_ARCH INSTALL_VERSION=$INSTALL_VERSION"
+
+### run tools
+if [ "$OTHER_FUNC" = 'dep_tools' ]
+then
+    check_tools
+    echo "[ PV DRIVER DEPENDING COMMANDS ]"
+    echo "$DEP_CMDS_LIST"
+    echo ""
+    echo "[ DEPENDING PACKAGE: DEPENDING COMMAND ]"
+    echo "$DEP_PKGS_LIST"
+    echo ""
+    exit 0
+elif [ "$OTHER_FUNC" = 'restore' ]
+then
+    trap "" INT TERM QUIT HUP
+    $Info "restore backups."
+    restore_all_files
+    exit $?
+elif [ "$OTHER_FUNC" = 'service' ]
+then
+    trap "" INT TERM QUIT HUP
+    $Info "restart services."
+    remove_rc_config ${UVP_MONITOR_INIT} && add_rc_config ${UVP_MONITOR_INIT}
+    if [ "$AUTO_UPGRADE" != 'true' ]
+    then
+        stop_init_script ${UVP_MONITOR_INIT} && start_init_script ${UVP_MONITOR_INIT}
+    fi
+    exit $?
+fi
+
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#
+EnterCriticalSection
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#
+cd "$INSTALLER_DIR"
+if [ "$INSTALLER" = "install" ]
+then
+    #
+    INSTALL_ACTION="install"
+    ##modfied  on 2013-6-20
+    if [ -f "${INSTALL_PATH}/version.ini" ]
+    then
+        DRIVERINFO="`cat ${INSTALL_PATH}/version.ini | grep "DriverVersion"`"
+        if [ -z ${DRIVERINFO} ]
+        then
+                INSTALL_ACTION="upgrade"
+        elif [ -n ${DRIVERINFO} ]
+        then
+            ### old version information
+            DRIVERINFO=$(. "${INSTALL_PATH}/version.ini" ; echo ${DriverVersion} )
+            OldPvdriverVersion=$(. "${INSTALL_PATH}/version.ini" ; echo ${pvdriverVersion} )
+            CurRunVersion=`cat $UPGRADE_VERSION`
+            LastRunversion=`cat $LAST_VERSION`
+            if [ "${DRIVERINFO_TMP}" = "${DRIVER_VERSION}" ]
+            then
+                USERDRIINFO="`cat ${INSTALL_PATH}/version.ini | grep "UserDriVer"`"
+                if [ -z "${USERDRIINFO}" ]
+                then
+                    INSTALL_ACTION="upgrade_hcall"
+                elif [ -n ${USERDRIINFO} ]
+                then
+                    USERDRIINFO=$(. "${INSTALL_PATH}/version.ini" ; echo ${UserDriVer} )
+                    if [ "X" = "X${USERDRIINFO}" ] || [ $(compare_version "$USERDRI_VERSION" "$USERDRIINFO" ; echo $?) != 0 ]
+                    then
+                        INSTALL_ACTION="upgrade_hcall"
+                    else
+                        INSTALL_ACTION="upgrade_uvpmonitor"
+                    fi
+                fi
+            else
+                INSTALL_ACTION="upgrade"
+            fi
+        fi
+    fi
+    ##modfied end
+    if CheckVersion
+    then
+        # replace uninstall with install, for cpmpatibility with legacy pvdriver
+        if [ ! -f "$UNINSTALLER_DIR/$UNINSTALLER" ]
+        then
+            if [ -f "$UNINSTALLER_DIR/install" ]
+            then
+                UNINSTALLER="install"
+            else
+                abort "you have a legacy pvdriver installed, please uninstall it manually."
+            fi
+        fi
+    fi
+elif [ "$INSTALLER" = "uninstall" ]
+then
+    INSTALL_ACTION="uninstall"
+    if ! CheckVersion
+    then
+        abort "unknown error for uninstallation."
+    fi
+else
+    abort "invalid installer $INSTALLER"
+fi
+
+### uninstall pvdriver
+if [ "$INSTALL_ACTION" = "uninstall" ]
+then
+    if ! Uninstall
+    then
+        abort "Uninstall failed."
+    fi
+    if [ "$(which_binary kudzu)" != 'none_binary' ]; then
+        chkconfig kudzu on 1>/dev/null 2>&1
+        $Info "chkconfig kudzu on"
+    fi
+elif [ "$INSTALL_ACTION" = "upgrade" ] || [ "$INSTALL_ACTION" = "upgrade_uvpmonitor" ] || [ "$INSTALL_ACTION" = "upgrade_hcall" ]
+then
+    UVP_MONITOR_INI='/var/run/uvp-monitor.ini'
+    if [ ! -f "$UVP_MONITOR_INI" ]
+    then
+        if [ -z ${DRIVERINFO} ]
+        then
+            echo -n $(. ${INSTALL_PATH}/version.ini ; echo ${pvdriverVersion}) | sed 's/\([0-9]\+\.[0-9]\+\.[0-9]\+\).*/1.\1/g' > "$UVP_MONITOR_INI"
+        elif [ -n ${DRIVERINFO} ]
+        then
+            driverver=$(echo -n $DRIVERINFO | awk -F"." '{ print $1 }')
+            if [ "1" = "$driverver" ]
+            then
+                echo -n $(. ${INSTALL_PATH}/version.ini ; echo ${pvdriverVersion}) | sed 's/\([0-9]\+\.[0-9]\+\.[0-9]\+\).*/1.\1/g' > "$UVP_MONITOR_INI"
+            else
+                echo -n $(. ${INSTALL_PATH}/version.ini ; echo ${pvdriverVersion}) | sed 's/\([0-9]\+\.[0-9]\+\.[0-9]\+\).*/2.\1/g' > "$UVP_MONITOR_INI"
+            fi
+        fi
+    fi
+    if [ "$UNINSTALLER" = 'install' ]
+    then
+        UNINSTALLER_PARAM='-u'
+        export upgrade_state="reinstall"
+    else
+        UNINSTALLER_PARAM=''
+    fi
+
+    if ! (cd "$UNINSTALLER_DIR" && ./$UNINSTALLER "$UNINSTALLER_PARAM" && cd - >/dev/null)
+    then
+        abort "Uninstall failed."
+    fi
+    [ "$AUTO_UPGRADE" != 'true' ] && kill_proc ${UVP_MONITOR}
+fi
+
+if [ -e '/etc/SuSE-release' -o -n "$(grep -i 'suse\|s\.u\.s\.e' /etc/issue)" ] && [ -n "`uname -r | grep 2.6.16.46`" -o -n "`uname -r | grep 2.6.16.60`" ]
+then
+    $Info "remove_block_line_by_line"
+    remove_block_line_by_line "/etc/modprobe.d/blacklist" \
+                              'blacklist *\s*ide-cd:blacklist *\s*ide-core:blacklist *\s*ide-disk:blacklist *\s*ide-floppy:blacklist *\s*ide-tape:blacklist *\s*ide-scsi:blacklist *\s*piix:blacklist *\s*osst:blacklist *\s*scsi_mod:blacklist *\s*sd_mod:blacklist *\s*sg:blacklist *\s*sr_mod:blacklist *\s*st'
+fi
+
+### install pvdriver
+if [ "$INSTALL_ACTION" = "install" -o "$INSTALL_ACTION" = "upgrade" ] || [ "$INSTALL_ACTION" = "upgrade_uvpmonitor" ] || [ "$INSTALL_ACTION" = "upgrade_hcall" ]
+then
+    # install pvdriver
+    if ! Install
+    then
+        abort "Install failed."
+    fi
+    if [ "$(which_binary kudzu)" != 'none_binary' ]; then
+        chkconfig kudzu off 1>/dev/null 2>&1
+        $Info "chkconfig kudzu off"
+    fi
+fi
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#
+LeaveCriticalSection
+ret_val=$?
+#@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@#
+if [ "$CUR_INSTALL_LEVEL" = '1' ]
+then
+    if [ "$INSTALL_ACTION" = "uninstall" ]
+    then
+        rm -f "${UPGRADE_VERSION}"
+        rmdir "$(dirname $UPGRADE_VERSION)" 1>/dev/null 2>&1
+    else
+        mkdir -p "$(dirname $UPGRADE_VERSION)"
+        echo "2.$(echo ${INSTALL_VERSION} | sed 's/\([0-9]\+\.[0-9]\+\.[0-9]\+\).*/\1/g')" > "${UPGRADE_VERSION}"
+        if [ ! -d "/tmp/uvptools_temp" ] && ([ "$INSTALL_ACTION" == "upgrade_uvpmonitor" ] || [ "$INSTALL_ACTION" = "upgrade_hcall" ])
+        then
+            OLD_UPGRADE_VERSION="/var/run/tools_upgrade/pvdriver_version.ini"
+            cat ${UPGRADE_VERSION} > ${OLD_UPGRADE_VERSION}
+            cat ${UPGRADE_VERSION} > ${UVP_MONITOR_INI}
+            ${UVP_MONITOR_INIT} restart 1>/dev/null 2>&1
+            echo "UVP TOOLS is upgraded successfully."
+        elif [ -d "/tmp/uvptools_temp" ] && ([ "$INSTALL_ACTION" == "upgrade_uvpmonitor" ] || [ "$INSTALL_ACTION" = "upgrade_hcall" ])
+        then
+            OLD_UPGRADE_VERSION="/var/run/tools_upgrade/pvdriver_version.ini"
+            cat ${UPGRADE_VERSION} > ${OLD_UPGRADE_VERSION}
+            cat ${UPGRADE_VERSION} > ${UVP_MONITOR_INI}
+        fi
+    fi
+fi
+exit $ret_val

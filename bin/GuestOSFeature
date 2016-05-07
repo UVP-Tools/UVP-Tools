@@ -1,0 +1,183 @@
+#####################################################################
+#first column is GuestOS type name,
+#second column is the GuestOS support feature bitmap.
+# 
+#current feature bitmap:                                             
+#memory hotplug         1                                            
+#online detach-disk     2                                          
+#vcpu hotplug           4
+#####################################################################
+
+#GuestOS                          Feature
+#suse
+suse10_sp1_x86                      0
+suse10_sp1_x86_64                   0
+suse10_sp2_x86                      0
+suse10_sp2_x86_64                   0
+suse10_sp3_x86                      0
+suse10_sp3_x86_64                   0
+suse10_sp4_x86                      0
+suse10_sp4_x86_64                   0
+                                    
+suse11_sp0_x86                      6
+suse11_sp0_x86_64                   7
+suse11_sp1_x86                      6
+suse11_sp1_x86_64                   7
+suse11_sp2_x86                      2
+suse11_sp2_x86_64                   7
+suse11_sp3_x86                      2
+suse11_sp3_x86_64                   2
+opensuse_11.3_x86_64                0
+opensuse_13.2_x86_64                0
+suse10_sp2_customized_x86           0
+suse10_sp3_customized_x86_64        0
+suse10_sp4_customized_x86_64        0
+suse11_sp1_customized_v1_x86_64     0
+suse11_sp1_customized_v2_x86_64     0
+suse11_sp1_customized_v3_x86_64     0
+suse11_sp2_customized_v1_x86_64     0
+suse11_sp2_customized_v2_x86_64     0
+suse11_sp2_customized_v3_x86_64     0
+suse11_sp2_customized_v4_x86_64     0
+suse12_x86_64                       0
+
+#fedora                                    
+fedora6_x86                         0
+fedora6_x86_64                      0
+fedora8_x86                         0
+fedora8_x86_64                      0
+fedora9_x86                         0
+fedora12_x86                        4
+fedora14_x86_64                     0
+fedora22_x86_64                     0
+fedora23_x86_64                     0
+            
+#oracle         
+oracle5.7_x86_64                    1
+oracle5.8_x86                       0
+oracle5.8_x86_64                    0
+oracle6.1_x86                       0
+oracle6.1_x86_64                    0
+oracle6.2_x86                       0
+oracle6.2_x86_64                    0
+oracle6.3_x86                       0
+oracle6.3_x86_64                    0
+oracle6.4_x86                       0
+oracle6.4_x86_64                    0
+oracle6.5_x86                       0
+oracle6.5_x86_64                    0
+        
+#redhat && centos  
+redhat4.2_x86_64                    0  
+redhat4.4_x86                       0
+redhat4.4_x86_64                    0
+redhat4.5_x86                       0
+redhat4.5_x86_64                    0
+redhat4.6_x86                       0
+redhat4.6_x86_64                    0
+redhat4.7_x86                       0
+redhat4.7_x86_64                    0
+redhat4.8_x86                       0
+redhat4.8_x86_64                    0
+      
+redhat5.0_x86                       2
+redhat5.0_x86_64                    2
+redhat5.1_x86                       2
+redhat5.1_x86_64                    2
+redhat5.2_x86                       2
+redhat5.2_x86_64                    2
+redhat5.3_x86                       2
+redhat5.3_x86_64                    3
+redhat5.4_x86                       2
+redhat5.4_x86_64                    3
+redhat5.5_x86                       2
+redhat5.5_x86_64                    7
+redhat5.6_x86                       2
+redhat5.6_x86_64                    7
+redhat5.7_x86                       2
+redhat5.7_x86_64                    3
+redhat5.8_x86                       2
+redhat5.8_x86_64                    3
+redhat5.9_x86                       2
+redhat5.9_x86_64                    2
+                                    
+redhat6.0_x86                       2
+redhat6.0_x86_64                    7
+redhat6.1_x86                       2
+redhat6.1_x86_64                    7
+redhat6.2_x86                       2
+redhat6.2_x86_64                    7
+redhat6.3_x86                       2
+redhat6.3_x86_64                    7
+redhat6.4_x86                       2
+redhat6.4_x86_64                    7
+redhat6.5_x86                       2
+redhat6.5_x86_64                    7
+redhat7.0_x86_64                    0
+kylin3.0_x86_64                     0
+
+#centos
+centos5.5_x86_64                    3
+centos5.6_x86_64                    7
+centos5.9_x86                       2
+centos5.9_x86_64                    2
+centos6.0_x86_64                    3
+centos6.1_x86_64                    3
+centos6.2_x86_64                    7
+centos6.3_x86_64                    7
+centos6.4_x86_64                    3
+centos6.5_x86_64                    3
+
+#debian         
+debian5.0.10_x86_64                 0
+debian6_x86                         0
+debian6_x86_64                      0
+debian7_x86                         0
+debian7_x86_64                      0
+debian8_x86_64                      0
+            
+#ubuntu         
+ubuntu8.04_x86_64                   4
+ubuntu8.04.4_x86_64                 0
+ubuntu9.10_x86                      0
+ubuntu9.10_x86_64                   0
+ubuntu10.04_server_x86_64           0
+ubuntu10.04_desktop_x86_64          4
+ubuntu10.04.1_x86                   0
+ubuntu10.04.1_x86_64                0
+ubuntu10.04.2_x86_64                0
+ubuntu10.04.3_x86_64                0
+ubuntu10.04.4_x86_64                0
+ubuntu10.10_x86_64                  0
+ubuntu11.04_x86                     0
+ubuntu11.04_x86_64                  0
+ubuntu11.10_x86                     0
+ubuntu11.10_x86_64                  0
+ubuntu12.04_x86_64                  0
+ubuntu12.04.1_x86_64                0
+ubuntu12.04.2_x86                   0
+ubuntu12.04.2_x86_64                0
+ubuntu12.04.3_x86                   0
+ubuntu12.04.3_x86_64                0
+ubuntu12.04.4_x86                   0
+ubuntu12.04.4_x86_64                0
+ubuntu12.10_x86                     0
+ubuntu12.10_x86_64                  0
+ubuntu13.04_x86                     0
+ubuntu13.04_x86_64                  0
+ubuntu13.10_x86                     0
+ubuntu13.10_x86_64                  0
+ubuntu14.04_x86                     0
+ubuntu14.04_x86_64                  0
+ubuntu14.04.1_x86                   0
+ubuntu14.04.1_x86_64                0
+ubuntu10.04.2_customized_x86_64     0
+ubuntu14.04.3_x86_64                0
+
+#euleros
+euleros2.1_x86_64                   0
+
+gentoo_customized_x86               0
+default_x86                         0
+default_x86_64                      0
+#end

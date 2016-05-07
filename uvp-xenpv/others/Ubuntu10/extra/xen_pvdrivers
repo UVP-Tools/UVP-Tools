@@ -1,0 +1,7 @@
+# Install the paravirtualized drivers
+install libata  /sbin/modprobe xen-vbd 2>&1 |:; /sbin/modprobe --ignore-install libata
+
+install 8139cp  /sbin/modprobe xen-vnif >/dev/null 2>&1 || /sbin/modprobe --ignore-install 8139cp
+
+install 8139too  /sbin/modprobe xen-vnif >/dev/null 2>&1 || /sbin/modprobe --ignore-install 8139too
+

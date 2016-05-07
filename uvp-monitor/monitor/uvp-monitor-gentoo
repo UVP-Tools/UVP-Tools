@@ -1,0 +1,142 @@
+#!/sbin/runscript
+#
+# UVP Monitor.
+
+depend() {
+    after *
+}
+
+UVP_CONFDIR=${UVP_CONFDIR:-/etc/.uvp-monitor}
+UVP_PIDFILE=${UVP_PIDFILE:-/var/run/${SVCNAME}.pid}
+UVP_BINARY=${UVP_BINARY:-/usr/bin/uvp-monitor}
+Info='eval 2>&1 logger "[uvp-monitor]"'
+
+msg_failed() {
+	echo " ...fail."
+}
+
+msg_success() {
+	echo " ...done."
+}
+
+check_running() {
+	if [ -f "${UVP_PIDFILE}" -o -n "$(pidof $UVP_BINARY)" ]
+    then
+        return 0
+    else
+        return 1
+    fi
+}
+
+start() {
+	echo -n "Starting uvp-monitor service "
+	$Info "Starting uvp-monitor service "
+	if ! check_running
+	then
+		modprobe xen_hcall >/dev/null 2>&1
+		modprobe xen_procfs >/dev/null 2>&1
+		if [ ! -x "$UVP_BINARY" ]
+        then
+            $Info "Cannot run $BINARY"
+            msg_failed
+            return 1
+        fi
+		start-stop-daemon --start --exec $UVP_BINARY --pidfile "${UVP_PIDFILE}" > /dev/null
+		RETVAL=$?
+        if [ $RETVAL -eq 0 ]
+        then
+            echo `pidof $UVP_BINARY` > $UVP_PIDFILE
+            msg_success
+            return 0
+        else
+            $Info "Start uvp monitor fail"
+            msg_failed
+            return 1
+        fi
+    else
+        $Info "- Already started"
+        msg_success
+        return 0
+    fi
+}
+
+stop() {
+	echo -n "Stopping uvp-monitor service "
+    $Info "Stopping uvp-monitor service "
+    if check_running
+    then
+        # wait for uvptools upgrading
+        trap 'echo 1>&2 ; exit 0' INT TERM QUIT HUP
+        timeout=300
+        while [ -d "/tmp/uvptools_temp" -a $timeout -gt 0 ]
+        do
+            echo -n '.' 1>&2 ; sleep 1
+            timeout=$((timeout-1))
+        done
+        rm -fr /tmp/uvptools_temp
+        trap '-' TERM
+
+        for pid in "$(pidof "$UVP_BINARY")"
+        do
+            kill -9 $pid > /dev/null 2>&1
+            sleep 1
+            break
+        done
+        
+        rm -f "$UVP_PIDFILE"
+        if ! check_running
+        then
+            msg_success
+            return 0
+        else
+            $Info "Stop uvp monitor fail"
+            msg_failed
+            return 1
+        fi
+    else
+       $Info "- Already stoped"
+        msg_success
+        return 0
+    fi
+}
+
+restart() {
+	stop
+    i=0
+    while [ "$i" -lt 5 ]
+    do
+        i=$((i+1))
+        if check_running 
+        then
+            sleep 5
+            $Info "Stop uvp-monitor fail, try again"
+            stop
+        fi
+    done
+
+    start
+    i=0
+    while [ "$i" -lt 5 ]
+    do
+        i=$((i+1))
+        if ! check_running 
+        then
+            sleep 5
+            $Info "Start uvp-monitor fail, try again"
+            start
+            ret=$?
+        fi
+    done
+    return $ret
+}
+
+status() {
+	echo -n "Checking for uvp-monitor"
+    if check_running
+    then
+        echo " running..."
+    else
+        echo " not running... "
+    fi
+    return 0
+}

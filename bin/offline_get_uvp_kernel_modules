@@ -1,0 +1,298 @@
+#!/bin/bash
+
+SYS_TYPE=$1
+KERN_RELEASE=$2
+CPU_ARCH=$3
+MODULES_PATH=xvf-
+
+if [ -f "/etc/SuSE-release" ] && [ ! -f "/etc/EulerLinux.conf" ]
+then
+	os_version=$(cat /etc/SuSE-release | awk -F" " 'NR==2 {print $3}')
+	os_patchlevel=$(cat /etc/SuSE-release | awk -F" " 'NR==3 {print $3}')
+	ker_rel_sysinfo=$(echo ${KERN_RELEASE} | awk -F"-" '{print $3}') 
+	OS_DIST_SVER="${SYS_TYPE}${os_version}sp${os_patchlevel}"
+fi
+
+case "$SYS_TYPE" in
+suse*)
+    if [ "suse10sp1" = "${OS_DIST_SVER}" ]; then
+		#suse10 sp1
+	    KERN_RELEASE="2.6.16.46-0.12-${ker_rel_sysinfo}"
+		SYS_TYPE='SLES10'
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.29-bigsmp"`" ]; then
+		#suse10 sp2 customized 
+		SYS_TYPE='SLES10'
+	elif [ "suse10sp2" = "${OS_DIST_SVER}" ]; then
+		#suse10 sp2
+	    KERN_RELEASE="2.6.16.60-0.21-${ker_rel_sysinfo}"
+		SYS_TYPE='SLES10'
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.16.60-0.74.7"`" ] && [ "x86_64" = "${CPU_ARCH}" ] && [ "smp" = "${ker_rel_sysinfo}" ]; then
+		#suse10 sp3 customized 
+		KERN_RELEASE="2.6.16.60-0.54.5-smp"
+		SYS_TYPE='SLES10'
+	elif [ "suse10sp3" = "${OS_DIST_SVER}" ]; then
+		#suse10 sp3
+	        KERN_RELEASE="2.6.16.60-0.54.5-${ker_rel_sysinfo}"
+		SYS_TYPE='SLES10'
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.16.60-0.99.1"`" ] && [ "x86_64" = "${CPU_ARCH}" ] && [ "smp" = "${ker_rel_sysinfo}" ]; then
+		#suse10 sp4 customized 
+		KERN_RELEASE="2.6.16.60-0.85.1-smp"
+		SYS_TYPE='SLES10'
+	elif [ "suse10sp4" = "${OS_DIST_SVER}" ]; then
+		#suse10 sp4
+	        KERN_RELEASE="2.6.16.60-0.85.1-${ker_rel_sysinfo}"
+		SYS_TYPE='SLES10'
+        elif [ "suse11sp0" = "${OS_DIST_SVER}" ]; then
+		#suse11 sp0
+	        KERN_RELEASE="2.6.27.19-5-${ker_rel_sysinfo}"
+		SYS_TYPE='SLES11'
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.32.54-0.3"`" ] && [ "x86_64" = "${CPU_ARCH}" ]; then
+		# suse11sp1_customized_v1
+		SYS_TYPE='SLES11'
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.32.59-0.3"`" ] && [ "x86_64" = "${CPU_ARCH}" ]; then
+		# suse11sp1_customized_v2
+		SYS_TYPE='SLES11'
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.32.59-0.7"`" ] && [ "x86_64" = "${CPU_ARCH}" ]; then
+		# suse11sp1_customized_v3
+		SYS_TYPE='SLES11'
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.32.59-0.17"`" ] && [ "x86_64" = "${CPU_ARCH}" ]; then
+		# suse11sp1_customized_v3
+		KERN_RELEASE="2.6.32.59-0.7-default"
+		SYS_TYPE='SLES11'
+	elif [ "suse11sp1" = "${OS_DIST_SVER}" ]; then
+	        #suse11 sp1
+                KERN_RELEASE="2.6.32.12-0.7-${ker_rel_sysinfo}"
+		SYS_TYPE='SLES11'
+	elif [ -n "`echo ${KERN_RELEASE} | grep "3.0.58"`" ] && [ "x86_64" = "${CPU_ARCH}" ]; then
+		# suse11 sp2 customized v1 v2
+		SYS_TYPE='SLES11'
+	elif [ -n "`echo ${KERN_RELEASE} | grep "3.0.80"`" ] && [ "x86_64" = "${CPU_ARCH}" ]; then
+		# suse11 sp2 customized v3
+		SYS_TYPE='SLES11'
+	elif [ -n "`echo ${KERN_RELEASE} | grep "3.0.93-0.5"`" ]; then
+		# suse11 sp2 customized v4
+		KERN_RELEASE="3.0.13-0.27-default"
+		SYS_TYPE='SLES11'
+	elif [ "suse11sp2" = "${OS_DIST_SVER}" ];then
+		# suse11 sp2
+		KERN_RELEASE="3.0.13-0.27-${ker_rel_sysinfo}"
+		SYS_TYPE='SLES11'
+	elif [ "suse11sp3" = "${OS_DIST_SVER}" ]; then
+		# suse11 sp3
+                KERN_RELEASE="3.0.76-0.11-${ker_rel_sysinfo}"
+		SYS_TYPE='SLES11'
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.34"`" ]; then
+		#OpenSUSE 11.3
+		SYS_TYPE='openSUSE11.3'
+	elif [ -n "`echo ${KERN_RELEASE} | grep "3.16.6"`" ]; then
+		#OpenSUSE 13.2
+		SYS_TYPE='openSUSE13.2'
+	fi
+	;;	
+redhat*)
+	dist_arch="`echo ${KERN_RELEASE} | awk -F"." '{print $4}'`"
+	dist_bit="${CPU_ARCH}"
+	if [ -n "`echo ${KERN_RELEASE} | grep "2.6.18-1.2798"`" ]; then
+		#Fedora 6
+		SYS_TYPE='FEDORA6'
+		if [ "i686" == ${dist_bit} -a -f "/boot/config-${KERN_RELEASE}" -a -n "`cat /boot/config-${KERN_RELEASE} | grep M586=y`" ];then
+			KERN_RELEASE="2.6.18-1.2798.fc6.i586"
+		fi
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.23.1-42.fc8"`" ]; then
+		SYS_TYPE='FEDORA8'
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.25"`" ]; then
+		#Fedora 9
+		SYS_TYPE='FEDORA9'
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.31.5"`" ]; then
+		#Fedora 12
+		SYS_TYPE='FEDORA12'
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.35.6"`" ]; then
+		#Fedora 14
+		SYS_TYPE='FEDORA14'
+	elif [ -n "`echo ${KERN_RELEASE} | grep "4.0.4-301"`" ]; then
+		#Fedora22_64
+		SYS_TYPE='FEDORA22'
+	elif [ -n "`echo ${KERN_RELEASE} | grep "4.2.3-300"`" ]; then
+		#Fedora23_64
+		SYS_TYPE='FEDORA23'
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.9-22"`" ]; then
+		#redhat 4.2
+		SYS_TYPE='RHEL4'
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.9" | grep "AXS"`" ]; then
+		#red flag asianux 2sp4
+		SYS_TYPE='RHEL4'
+		KERN_RELEASE="2.6.9-89.${dist_arch}"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.9"`" ]; then
+		#redhat 4.4 4.5 4.6 4.7 4.8 
+		SYS_TYPE='RHEL4'
+		KERN_RELEASE="2.6.9-42.${dist_arch}"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.18-SKL1.9.4.ky3.173.4.1"`" ]; then
+		#中标麒麟 3.0
+		SYS_TYPE='RHEL5'
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.18.*.AXS"`" ]; then
+		#Red Flag 3 sp2 sp3
+		SYS_TYPE='RHEL5'
+		KERN_RELEASE="2.6.18-8.el5"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.18-194"`" ]; then
+		if [ "i686" == ${dist_bit} ]; then
+			#redhat 5.3
+			SYS_TYPE='RHEL5'
+			KERN_RELEASE="2.6.18-128.${dist_arch}"
+		else
+			#redhat 5.5
+			SYS_TYPE='RHEL5'
+			KERN_RELEASE="2.6.18-194.${dist_arch}"
+		fi
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.18-[0-9]\{1,2\}\."`" ]; then
+		#redhat 5.0 5.1 5.2
+		SYS_TYPE='RHEL5'
+		KERN_RELEASE="2.6.18-8.${dist_arch}"
+    	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.18-[0-9]\{3\}\."`" ]; then
+		#redhat 5.3 5.4 5.6 5.7 5.8
+		SYS_TYPE='RHEL5'
+		if [ -n "`echo ${KERN_RELEASE} | grep "el5PAE"`" ]; then
+			KERN_RELEASE="2.6.18-128.el5PAE"
+		else
+			KERN_RELEASE="2.6.18-128.el5"
+		fi
+    	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.39-200.24.1.el6uek"`" ]; then
+		#Oracle 6.3
+		SYS_TYPE='RHEL6'
+		KERN_RELEASE="2.6.39-200.24.1.el6uek.${dist_bit}"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.32-300.10.1.el5uek"`" ]; then
+		#Oracle 5.8
+		SYS_TYPE='RHEL5'
+		KERN_RELEASE="2.6.32-300.10.1.el5uek"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "el5uek"`" ]; then
+		#Oracle 5.7 5.8 
+		SYS_TYPE='RHEL5'
+		KERN_RELEASE="2.6.32-200.13.1.el5uek"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.32-300.3.1"`" ]; then
+		#Oracle 6.2
+		SYS_TYPE='RHEL6'
+		KERN_RELEASE="2.6.32-300.3.1.el6uek.${dist_bit}"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.39-400.17.1.el6uek"`" ]; then
+		#Oracle 6.4
+		SYS_TYPE='RHEL6'
+		KERN_RELEASE="2.6.39-400.17.1.el6uek.${dist_bit}"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.39-400.211.1.el6uek"`" ]; then
+		#Oracle 6.5 x86
+		SYS_TYPE='RHEL6'
+		KERN_RELEASE="2.6.39-400.211.1.el6uek.${dist_bit}"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "3.8.13-16.2.1.el6uek"`" ]; then
+		##Oracle 6.5 x86_64
+		SYS_TYPE='RHEL6'
+		KERN_RELEASE="3.8.13-16.2.1.el6uek.${dist_bit}"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "el6uek"`" ]; then
+		#Oracle 6.1 6.4
+		SYS_TYPE='RHEL6'
+		KERN_RELEASE="2.6.32-100.34.1.el6uek.${dist_bit}"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.32-71"`" ]; then
+		#redhat 6.0
+		SYS_TYPE='RHEL6'
+		KERN_RELEASE="2.6.32-71.el6.${dist_bit}"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.32-279.2.1.el6.i686"`" ]; then
+		#RedFlag 4 sp2 x86
+		SYS_TYPE='RHEL6'
+		KERN_RELEASE="2.6.32-279.el6.i686"
+   	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.32-131.0.15"`" ]; then
+		#redhat 6.1
+        	SYS_TYPE='RHEL6'
+        	KERN_RELEASE="2.6.32-131.0.15.el6.${dist_bit}"
+    elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.32-220"`" ]; then
+		#redhat 6.2 中标麒麟 6.0
+        SYS_TYPE='RHEL6'
+        KERN_RELEASE="2.6.32-220.el6.${dist_bit}"
+    elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.32-279"`" ]; then
+		#redhat 6.3
+        SYS_TYPE='RHEL6'
+        KERN_RELEASE="2.6.32-279.el6.${dist_bit}"
+    elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.32-358"`" ]; then
+		#redhat 6.4
+        SYS_TYPE='RHEL6'
+        KERN_RELEASE="2.6.32-358.el6.${dist_bit}"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.32"`" ]; then
+		#redhat 6.5
+		SYS_TYPE='RHEL6'
+		KERN_RELEASE="2.6.32-131.0.15.el6.${dist_bit}"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "3.10.0"`" ]; then
+		#redhat 7.0
+		SYS_TYPE='RHEL7'
+		KERN_RELEASE="3.10.0-123.el7.${dist_bit}"
+	fi
+	;;
+debian*)
+	if [ -n "`echo ${KERN_RELEASE} | grep "2.6.26-2"`" ]; then
+		#Debian 5.0.10
+		SYS_TYPE="Debian5"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.32-5"`" ]; then
+		#Debian 6
+		SYS_TYPE="Debian6"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "3.2.0-4"`" ]; then
+		#Debian 7
+		SYS_TYPE="Debian7"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "3.16.0-4"`" ]; then
+		#Debian 8.2
+		SYS_TYPE="Debian8"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.24"`" ]; then
+		#Ubuntu 8.04 
+		SYS_TYPE="Ubuntu8"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.31-14"`" ]; then
+		#Ubuntu 9.10 
+		SYS_TYPE="Ubuntu9"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.38-16-generic"`" ]; then
+		#Ubuntu 10.04.2 customized
+		SYS_TYPE="Ubuntu10"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.32"`" ]; then
+		#Ubuntu 10.04 and 10.04.1 and 10.04.2 and 10.04.3
+		SYS_TYPE="Ubuntu10"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.35"`" ]; then
+		#Ubuntu 10.10
+		SYS_TYPE="Ubuntu10"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "3.0.0-15"`" ]; then
+		#Ubuntu 10.04.4
+		SYS_TYPE="Ubuntu10"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "3.0.0"`" ]; then
+		#Ubuntu 11.10
+		SYS_TYPE="Ubuntu11"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "2.6.38-8"`" ]; then
+		#Ubuntu 11.04
+		SYS_TYPE="Ubuntu11"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "3.2.0"`" ]; then
+		#Ubuntu 12.04 and 12.04.1
+		SYS_TYPE="Ubuntu12"
+    	elif [ -n "`echo ${KERN_RELEASE} | grep "3.5.0"`" ]; then
+		#Ubuntu 12.04.2 and 12.10 
+		SYS_TYPE="Ubuntu12"
+    	elif [ -n "`echo ${KERN_RELEASE} | grep "3.8.0-29"`" ]; then
+		#Ubuntu 12.04.3
+		SYS_TYPE="Ubuntu12"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "3.11.0-15"`" ]; then
+		#Ubuntu 12.04.4
+		SYS_TYPE="Ubuntu12"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "3.8.0"`" ]; then
+		#Ubuntu 13.04 
+		SYS_TYPE="Ubuntu13"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "3.11.0-12"`" ]; then
+		#Ubuntu 13.10 
+		SYS_TYPE="Ubuntu13"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "3.13.0-24"`" ]; then
+		#Ubuntu 14.04
+		SYS_TYPE="Ubuntu14"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "3.13.0-32"`" ]; then
+		SYS_TYPE="Ubuntu14"
+	elif [ -n "`echo ${KERN_RELEASE} | grep "3.19.0-25"`" ]; then
+        	#Ubuntu 14.04.3
+        	SYS_TYPE="Ubuntu14"
+	fi
+	;;
+gentoo*)
+	if [ -n "`echo ${KERN_RELEASE} | grep -w "3.9.0"`" ]; then
+		#Gentoo customized
+		SYS_TYPE="Gentoo"
+	fi
+	;;
+esac
+
+
+echo "$MODULES_PATH$KERN_RELEASE-$CPU_ARCH-$SYS_TYPE"

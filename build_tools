@@ -1,0 +1,413 @@
+#!/bin/bash
+###############################################################################
+###### File name   : build_tools                                         ######
+###### Author      :                                                     ######
+###### Description : To build the UVP Tools for Linux distribution.      ######
+###### History     :                                                     ######
+######               2012-02-24: Create the file                         ######
+######               2012-09-04: To support multi kernels in an OS,      ######
+######               2012-12-24: Rename this script                      ######
+######                              build_xenpv -> build_tools           ######
+######               2013-01-19: To support the PV OPS VMs               ######
+###############################################################################
+
+# UVP Tools name & version
+PACKAGE_NAME="uvp-tools-linux"
+UVP_TOOLS_VERSION=""
+
+# The target OS distribution in detail, such as rhel-5_series.
+OS_RELEASE=""
+OS_DIST=""
+OS_DIST_SRC=""
+
+# UVP-tools sources absolute path for linux.
+DEV_CUR_DIR="`pwd`"
+UVP_TOOLS_DIR=""
+UVP_TOOLS_VER=""
+CI_TAG_VER="2."
+
+# Linux tools sources path.
+DRV_SRC_DIR="`pwd`/uvp-xenpv"
+SRV_SRC_DIR="`pwd`/uvp-monitor"
+
+BIN_SRV="uvp-monitor"
+BIN_SO="libxenstore.so"
+KERN_VER="`uname -r`"
+CPU_ARCH="`uname -m`"
+SYS_BIT=""
+
+# Prompt
+BUILD_LOG="build_tools_"
+BUILD_WARN="[ Warning ] ---"
+BUILD_ERR="[ Error ] ---"
+OPT_PARAMETER=""
+
+case "$CPU_ARCH" in
+    i[3456789]86|x86)
+        SYS_BIT="32"
+        ;;
+    x86_64|amd64)
+        SYS_BIT="64"
+        ;;
+    *)
+        echo "$CPU_ARCH has been not supported!"
+        exit
+esac
+
+# help
+usage()
+{
+    echo "Usage: `basename $0` "
+    echo "       Build the PV Drivers and uvp-monitor. "
+    echo "       -b make all. "
+    echo "       -c make clean. "
+}
+
+# 
+get_os_release()
+{
+    if [ -f /etc/redhat-release ]; then
+        if [ "Fedora" == `cat /etc/redhat-release | awk -F" " '{print $1}'` ]; then
+            OS_RELEASE="Fedora"
+        else
+            OS_RELEASE="redhat"
+        fi
+    elif [ -f /etc/SuSE-release ]; then
+        if [ "openSUSE" == `cat /etc/SuSE-release | awk -F" " 'NR==1 {print $1}'` ]; then
+            OS_RELEASE="openSUSE"
+        else
+            OS_RELEASE="suse"
+        fi
+    elif [ -f /etc/debian_version ]; then
+        OS_RELEASE="`cat /etc/issue | awk -F" " '{print $1}'`"
+    elif [ -f /etc/gentoo-release ]; then
+        OS_RELEASE="Gentoo"
+    else
+        OS_RELEASE="unknown"
+    fi
+}
+
+get_os_distribution_info()
+{
+    local ver_os_rel=""
+    
+    get_os_release
+    
+    if [ "redhat" == ${OS_RELEASE} ]; then
+        if [ -n "`uname -r | grep 2.6.18-SKL1.9.4.ky3.173.4.1`" ]; then
+            OS_DIST="RHEL5"
+            OS_DIST_SRC="others/RHEL5"
+            return
+        fi
+        ver_os_rel="`cat /etc/redhat-release | awk -F" " '{print $7}' | awk -F"." '{print $1}'`"
+        OS_DIST="RHEL${ver_os_rel}"
+        # For RHEL PV_OPS VMs which version had been greater than RHEL5.
+        if [ "5" -lt "${ver_os_rel}" ]; then
+            # For RHEL 6.0 VMs which version must be change manufacturer's kernel.
+            if [ "32-71" == "`uname -r | awk -F'.' '{printf $3}'`" ]; then
+                OS_DIST_SRC='others/Ubuntu10'
+            else
+                OS_DIST_SRC='uvp-pvops_xen_driver-2.6.32to4.0.x'
+            fi
+        else
+            # For OEL PV_OPS VM which version is OEL5.7\OEL5.8.
+            if [ "32-200" == "`uname -r | awk -F'.' '{printf $3}'`" ] || [ "32-300" == "`uname -r | awk -F'.' '{printf $3}'`" ]; then
+                OS_DIST_SRC='uvp-pvops_xen_driver-2.6.32to4.0.x'
+            else
+                OS_DIST_SRC="others/${OS_DIST}"
+            fi
+        fi
+    elif [ "Fedora" == ${OS_RELEASE} ]; then
+        ver_os_rel="`cat /etc/redhat-release | awk -F" " '{print $3}'`"
+        OS_DIST="FEDORA${ver_os_rel}"
+        if [ "12" -lt "${ver_os_rel}" ]; then
+            OS_DIST_SRC='others/Ubuntu10'
+        elif [ -n "`uname -r | grep "2.6.18-1.2798"`" ]; then
+            OS_DIST_SRC='others/RHEL5'
+            OS_DIST="FEDORA6"
+        else
+            OS_DIST_SRC="others/${OS_DIST}"
+        fi
+    elif [ "suse" == ${OS_RELEASE} ]; then
+        ver_os_rel="`cat /etc/SuSE-release | awk -F" " '{print $5}'`"
+        OS_DIST="SLES${ver_os_rel}"
+        if [ "SLES11" == ${OS_DIST} ]; then
+            OS_DIST_SRC="uvp-classic_xen_driver-2.6.32to3.0.x"
+        elif [ "SLES12" == ${OS_DIST} ]; then
+            OS_DIST_SRC="uvp-classic_xen_driver-3.12.xto3.16.x"
+        else
+            OS_DIST_SRC="others/${OS_DIST}"
+        fi
+        if [ -n "`uname -r | grep "2.6.29-bigsmp"`" ]; then
+            OS_DIST="SLES10"
+            OS_DIST_SRC="others/Ubuntu10"
+        fi
+    elif [ "openSUSE" == ${OS_RELEASE} ]; then
+        ver_os_rel="`cat /etc/SuSE-release | awk -F" " 'NR==1 {print $2}'`"
+        OS_DIST="openSUSE${ver_os_rel}"
+        OS_DIST_SRC='others/Ubuntu10'
+        if [ -n "`echo ${kernel_uname_release} | grep "3.16.6-2"`" ]; then
+            OS_DIST_SRC="uvp-classic_xen_driver-3.12.xto3.16.x"
+        fi
+    elif [ "Debian" == ${OS_RELEASE} ]; then
+        ver_os_rel="`cat /etc/issue | awk -F" " '{print $3}' | awk -F"." '{print $1}'`"
+        OS_DIST="Debian${ver_os_rel}"
+        # For Debian PV_OPS VMs which version had been greater than Ubuntu10.
+        if [ "6" -lt "${ver_os_rel}" ] || [ "6" -eq "${ver_os_rel}" -a -n "`uname -m | grep x86_64`" ]; then
+            OS_DIST_SRC='uvp-pvops_xen_driver-2.6.32to4.0.x'
+        else
+            OS_DIST_SRC='others/Ubuntu10'
+        fi
+    elif [ "Ubuntu" == ${OS_RELEASE} ]; then
+        if [ -n "`uname -r | grep 3.0.0-15`" ] || [ -n "`uname -r | grep 2.6.38-16-generic`" ]; then
+            OS_DIST="Ubuntu10"
+            OS_DIST_SRC="uvp-pvops_xen_driver-2.6.32to4.0.x"
+            return
+        fi
+        if [ -n "`uname -r | grep 2.6.31-14`" ]; then
+            OS_DIST="Ubuntu9"
+            OS_DIST_SRC="others/Ubuntu10"
+            return
+        fi
+        ver_os_rel="`cat /etc/issue | awk -F" " '{print $2}' | awk -F"." '{print $1}'`"
+        OS_DIST="Ubuntu${ver_os_rel}"
+        # For Ubuntu PV_OPS VMs which version had been greater than Ubuntu10.
+        if [ "10" -lt "${ver_os_rel}" ]; then
+            OS_DIST_SRC='uvp-pvops_xen_driver-2.6.32to4.0.x'
+        else
+            OS_DIST_SRC="others/${OS_DIST}"
+        fi
+    elif [ "Gentoo" == ${OS_RELEASE} ]; then
+        OS_DIST="Gentoo"
+        OS_DIST_SRC="uvp-pvops_xen_driver-2.6.32to4.0.x"
+    else
+        echo "Sorry, this Operating System could not support!"
+    fi
+}
+
+build_xenpv()
+{
+    local build_ops=$1
+    local kern_ver=$2
+    local kern_dir="/lib/modules/$kern_ver/build"
+    local mod_dir="${UVP_TOOLS_DIR}/lib/modules/xvf-${kern_ver}-${CPU_ARCH}-${OS_DIST}/"
+    local mod_with_dir=""
+    
+    cd ${DRV_SRC_DIR}/${OS_DIST_SRC}
+    
+    if [ 'b' == ${build_ops} ]; then
+        mkdir -p ${mod_dir}
+        make all KERNDIR=${kern_dir} BUILDKERNEL=$(uname -r) CONFIG_DEBUG_SECTION_MISMATCH=y -s \
+                                2>> ${BUILD_LOG}${OS_DIST}_xenpv.log
+        mod_with_dir="`find -name *.ko`"
+        for mod_xenpv in ${mod_with_dir}
+        do
+            cp --parents ${mod_xenpv} ${mod_dir}
+        done
+    elif [ 'c' == ${build_ops} ]; then
+        make clean KERNDIR=${kern_dir} BUILDKERNEL=$(uname -r) -s
+    else
+        echo "${BUILD_WARN} bad parameter, please show help."
+    fi
+    
+    cd -
+}
+
+build_xenpv_alldist()
+{
+    local build_ops=$1
+    local del_illegal_kern=""
+    
+    for kernel in `ls /lib/modules/`
+    do
+        # When in the RHEL4 should not build the illegal kernel. ex. kabi-4.0.0/kabi-4.0.0smp
+        del_illegal_kern="`echo ${kernel} | awk -F"." '{print $1}'`"
+        standard_kern="`uname -r | awk -F"." '{print $1}'`"
+        if [ "${standard_kern}" != "${del_illegal_kern}" ]; then
+        	continue
+        fi
+        echo "Starting to compile ${kernel} in the ${OS_DIST}: "
+        build_xenpv ${build_ops} ${kernel}
+        build_xenpv 'c' ${kernel}
+    done
+}
+
+hacking_driver_ver()
+{
+    local mode_info=$1
+    local ver_file=$2
+    local base_ver_line=$(grep -n "MODULE_VERSION" ${ver_file} | head -1 | awk -F":" '{print $1}')
+    local hack_kver=$(cat "${DRV_SRC_DIR}/${osdir}/version.ini" | grep -w KernModeVersion | awk -F"=" '{print $2}')
+    local hack_uver=$(cat "${DRV_SRC_DIR}/${osdir}/version.ini" | grep -w UserModeVersion | awk -F"=" '{print $2}')
+
+    if [ "X" = "X${base_ver_line}" ]
+    then
+        #MODULE_VERSION("1");
+        if [ "kern" = "${mode_info}" ]
+        then
+            echo "MODULE_VERSION(\"${hack_kver}\");" >> ${ver_file}
+        else
+            echo "MODULE_VERSION(\"${hack_uver}\");" >> ${ver_file}
+        fi
+    else
+        base_ver=$(cat ${ver_file} | grep -w MODULE_VERSION | awk -F"\"" '{print $2}')
+        if [ "kern" = "${mode_info}" ]
+        then
+            sed -i "${base_ver_line}s;${base_ver};${hack_kver};" ${ver_file}
+        else
+            sed -i "${base_ver_line}s;${base_ver};${hack_uver};" ${ver_file}
+        fi
+    fi
+}
+
+build_server()
+{
+    local build_ops=$1
+    local srv_dir="${UVP_TOOLS_DIR}/usr/bin${SYS_BIT}"
+    local srv_target="uvp-monitor-${SYS_BIT}"
+    local tools_arp="arping"
+    local tools_ndp="ndsend"
+
+    mkdir -p ${srv_dir}
+
+    cd ${SRV_SRC_DIR}
+
+    if [ 'a' == ${build_ops} ] || [ 'b' == ${build_ops} ]; then
+        make ${srv_target} 2>> ${BUILD_LOG}${OS_DIST}_monitor.log
+        cp -f ${srv_target} ${srv_dir}/${BIN_SRV}
+        cp -f ${tools_arp} ${srv_dir}/${tools_arp}
+        cp -f ${tools_ndp} ${srv_dir}/${tools_ndp}
+    elif [ 'c' == ${build_ops} ]; then
+        make clean
+    else
+        echo "$BUILD_WARN bad parameter, please show help."
+        exit
+    fi
+
+    cd -
+}
+
+get_init_scripts()
+{
+    local dir_init_scripts="$UVP_TOOLS_DIR/etc"
+
+    cp -af $SRV_SRC_DIR/monitor/* $dir_init_scripts
+}
+
+get_runtime_libs()
+{
+    local dir_dynamic_libs="${UVP_TOOLS_DIR}/usr/lib"
+    local mach_bit=`uname -m`
+    local libpath=""
+
+    if [ "x86_64" != "${mach_bit}" ]; then
+        dir_dynamic_libs="${UVP_TOOLS_DIR}/usr/lib32"
+        mach_bit="i386"
+        libpath="/usr/lib"
+    else
+        dir_dynamic_libs="${UVP_TOOLS_DIR}/usr/lib64"
+        libpath="/usr/lib64"
+    fi
+
+    mkdir -p ${dir_dynamic_libs}
+    cp -af ./uvp-monitor/xen-4.1.2/tools/xenstore/$BIN_SO.3.0.0 ${dir_dynamic_libs}/$BIN_SO
+}
+
+get_kernel_modules()
+{
+    local dir_support_scripts="$UVP_TOOLS_DIR/bin"
+    local dir_offline_support="$UVP_TOOLS_DIR/bin/offline"
+
+    cp -af $DEV_CUR_DIR/bin/get_uvp_kernel_modules $dir_support_scripts
+    chmod 544 ${dir_support_scripts}/get_uvp_kernel_modules
+    #package disk unplug script
+    cp -af $DEV_CUR_DIR/bin/pvumount.sh $dir_support_scripts
+    chmod 544 ${dir_support_scripts}/pvumount.sh
+    #package CheckKernelUpdate script
+    cp -af $DEV_CUR_DIR/bin/CheckKernelUpdate.sh $dir_support_scripts
+    chmod 544 ${dir_support_scripts}/CheckKernelUpdate.sh
+    #package mem online script
+    cp -af $DEV_CUR_DIR/bin/mem_online.sh $dir_support_scripts
+    chmod 544 ${dir_support_scripts}/mem_online.sh
+    cp -af $DEV_CUR_DIR/bin/modify_swappiness.sh $dir_support_scripts
+    cp -af $DEV_CUR_DIR/bin/GuestOSFeature $dir_support_scripts
+
+    mkdir -p ${dir_offline_support}
+    cp -af $DEV_CUR_DIR/bin/offline_get_uvp_kernel_modules $dir_offline_support
+    chmod 544 ${dir_offline_support}/offline_get_uvp_kernel_modules
+    cp -af $DEV_CUR_DIR/bin/offline_copy_uvp_module $dir_offline_support
+    chmod 544 ${dir_offline_support}/offline_copy_uvp_module
+}
+
+build_tools()
+{
+    local build_ops=$1
+    local ver_file="${DEV_CUR_DIR}/version.ini"
+    
+    get_os_distribution_info
+    UVP_TOOLS_VER="`cat ${ver_file} | awk -F"=" 'NR==1 {print $2}'`"
+    
+    UVP_TOOLS_DIR="${DEV_CUR_DIR}/${PACKAGE_NAME}-${CI_TAG_VER}${UVP_TOOLS_VER}"
+    
+    
+    mkdir -p ${UVP_TOOLS_DIR}
+    mkdir -p $UVP_TOOLS_DIR/bin \
+             $UVP_TOOLS_DIR/config \
+             $UVP_TOOLS_DIR/etc 2>/dev/null
+
+    build_xenpv_alldist ${build_ops}
+    build_server ${build_ops}
+    get_init_scripts
+    get_runtime_libs
+    get_kernel_modules
+
+    ###
+    # To compress the Linux PV Driver into an iso
+    ###
+    cp -r -f ${DEV_CUR_DIR}/config/ ${UVP_TOOLS_DIR}
+    cp -f ${DEV_CUR_DIR}/install ${UVP_TOOLS_DIR}
+
+    first_line="$(sed -n '/^\s*[^#]/=' ${UVP_TOOLS_DIR}/install  | sed -n '1p')"
+    version_info="$(cat ${ver_file} | grep UVPToolsVersion | sed 's;UVPToolsVersion;INSTALL_VERSION;g')"
+    driver_info="$(cat ${ver_file} | grep DriverVersion | awk -F"-" '{print $1}' | sed 's;DriverVersion;DRIVER_VERSION;g')"
+    sed -i "${first_line} i${version_info}\n${driver_info}" "${UVP_TOOLS_DIR}/install"
+    chmod 744 ${UVP_TOOLS_DIR}/install
+
+    find ${UVP_TOOLS_DIR} -name .svn | xargs rm -rf
+}
+
+clean_tools()
+{
+    local build_ops=$1
+    build_server ${build_ops}
+
+    rm -rf ${PACKAGE_NAME}*
+}
+
+for i in `ls`
+do 
+    ret=$(file $i | grep text)
+    if [ -n "$ret" ]
+    then 
+        dos2unix $i 2>/dev/null
+    fi
+done
+
+while getopts "bc" options;
+do
+    case $options in
+    b)
+        OPT_PARAMETER='b'
+        build_tools $OPT_PARAMETER
+        ;;
+    c)
+        OPT_PARAMETER='c'
+        clean_tools $OPT_PARAMETER
+        ;;
+    *)
+        usage
+        exit 0
+        ;;
+    esac
+done
+

@@ -1,0 +1,269 @@
+#!/bin/sh
+#
+# UVP Monitor.
+
+# chkconfig: 35 35 65
+# description: uvp monitor
+#
+### BEGIN INIT INFO
+# Provides:       uvp-monitor
+# Required-Start: 
+# Should-Start:   $network $remote_fs
+# Required-Stop:
+# Should-Stop:    $network $remote_fs
+# Default-Start:  2 3 4 5
+# Default-Stop:   0 1 6
+# Description:    uvp monitor
+### END INIT INFO
+
+PATH=$PATH:/bin:/sbin:/usr/sbin:/usr/bin
+BINARY='/usr/bin/uvp-monitor'
+KERN_RELEASE="$(uname -r)"
+UVP_MODULES_PATH="/lib/modules/$KERN_RELEASE/updates/pvdriver"
+Info='eval 2>&1 logger "[uvp-monitor:$FUNCNAME:$LINENO]"'
+###############################################################################
+SYSTEM=unknown
+PIDFILE=$(basename "$BINARY")
+if [ -f /etc/redhat-release -o -n "$(grep -i 'GreatTurbo' /etc/issue)" ]
+then
+    SYSTEM=redhat
+    PIDFILE="/var/lock/subsys/$PIDFILE"
+elif [ -f /etc/SuSE-release ]
+then
+    SYSTEM=suse
+    PIDFILE="/var/run/$PIDFILE"
+elif [ -f /etc/debian_version ]
+then
+    SYSTEM=debian
+    PIDFILE="/var/run/$PIDFILE"
+else
+    SYSTEM=other
+    if [ -d /var/run -a -w /var/run ]
+    then
+        PIDFILE="/var/run/$PIDFILE"
+    fi
+fi
+
+###############################################################################
+if [ "$SYSTEM" = "redhat" ]
+then
+    . /etc/init.d/functions
+    msg_failed()
+    {
+        echo_failure 2>&1
+        echo
+    }
+
+    msg_success()
+    {
+        echo_success 2>&1
+        echo
+    }
+elif [ "$SYSTEM" = "suse" ]
+then
+    . /etc/rc.status
+    daemon()
+    {
+        startproc ${1+"$@"}
+    }
+
+    msg_failed()
+    {
+        rc_failed 1 2>&1
+        rc_status -v 2>&1
+    }
+
+    msg_success()
+    {
+        rc_reset 2>&1
+        rc_status -v 2>&1
+    }
+elif [ "$SYSTEM" = "debian" ]
+then
+    daemon()
+    {
+        start-stop-daemon --start --exec $1 -- $2
+    }
+
+    killproc()
+    {
+        start-stop-daemon --stop --retry 2 --exec $@
+    }
+
+    msg_failed()
+    {
+        echo " ...fail."
+    }
+
+    msg_success()
+    {
+        echo " ...done."
+    }
+fi
+
+###############################################################################
+check_running()
+{
+    if which pidof 2>&1 | :
+    then
+        PIDOF='pidof'
+    else
+        PIDOF=':'
+    fi
+    
+    if [ -f "${PIDFILE}" -o -n "$($PIDOF $BINARY)" ]
+    then
+        return 0
+    else
+        return 1
+    fi
+}
+
+StartService()
+{
+    $Info "Starting uvp-monitor service "
+    if ! check_running
+    then
+        ### 
+        if [ ! -x "$BINARY" ]
+        then
+            $Info "Cannot run $BINARY"
+            msg_failed
+            return 1
+        fi
+        
+        daemon $BINARY > /dev/null
+        RETVAL=$?
+        if [ $RETVAL -eq 0 ]
+        then
+            echo `pidof $BINARY` > $PIDFILE
+            msg_success
+            return 0
+        else
+            $Info "Start uvp monitor fail"
+            msg_failed
+            return 1
+        fi
+    else
+        $Info "- Already started"
+        msg_success
+        return 0
+    fi
+}
+
+StopService()
+{
+    $Info "Stopping uvp-monitor service "
+    if check_running
+    then
+        # wait for uvptools upgrading
+        trap 'echo 1>&2 ; exit 0' INT TERM QUIT HUP
+        trap '-' TERM
+
+        for pid in $(pidof "$BINARY")
+        do
+            kill -15 $pid > /dev/null 2>&1
+            sleep 1
+            break
+        done
+        killproc "$BINARY" ; rm -f "${PIDFILE}"
+        
+        rm -f "$PIDFILE"
+        if ! check_running
+        then
+            msg_success
+            return 0
+        else
+            $Info "Stop uvp monitor fail"
+            msg_failed
+            return 1
+        fi
+    else
+        $Info "- Already stoped"
+        msg_success
+        return 0
+    fi
+}
+
+RestartService()
+{
+    ret=0
+    StopService
+    ret=$?
+    i=0
+    while [ "$i" -lt 5 ]
+    do
+        i=$((i+1))
+        if check_running 
+        then
+            sleep 5
+            $Info "Stop uvp-monitor fail, try again"
+            StopService
+            ret=$?
+        fi
+    done
+    StartService
+    ret=$?
+    i=0
+    while [ "$i" -lt 5 ]
+    do
+        i=$((i+1))
+        if ! check_running 
+        then
+            sleep 5
+            $Info "Start uvp-monitor fail, try again"
+            StartService
+            ret=$?
+        fi
+    done
+    return $ret
+}
+
+ServiceStatus()
+{
+    echo -n "Checking for uvp-monitor"
+    if check_running
+    then
+        echo " running..."
+    else
+        echo " not running... "
+    fi
+    return 0
+}
+
+###############################################################################
+
+case "$1" in
+start)
+    StartService
+    retv=$?
+    i=0
+    while [ "$i" -lt 5 ]
+    do
+        i=$((i+1))
+        if ! check_running
+        then
+            sleep 5
+            $Info "Start uvp-monitor fail, try again"
+            StartService
+            retv=$?
+        fi
+    done
+    ;;
+stop)
+    StopService
+    retv=$?
+    ;;
+restart)
+    RestartService
+    retv=$?
+    ;;
+status)
+    ServiceStatus
+    retv=$?
+    ;;
+*)
+    echo "Usage: $0 {start|stop|restart|status}"
+    exit 1
+esac
+exit $retv

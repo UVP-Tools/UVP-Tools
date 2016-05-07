@@ -1,0 +1,92 @@
+#!/bin/bash
+
+shopt -u expand_aliases
+
+###############################################################################
+# main entrance
+###############################################################################
+function abort
+{
+    exit 1
+}
+function finish
+{
+    exit 0
+}
+
+### parse options
+while [ $OPTIND -le $# ]
+do
+    while getopts "b:" option
+    do
+        case $option in
+        b)
+            PARAM_EMU_BUS="$OPTARG"
+            ;;
+        *)
+            abort
+            ;;
+        esac
+    done
+    
+    if [ $OPTIND -gt $# ]
+    then
+        break
+    fi
+    
+    if [ -z $PARAM_DEV_NAME ]
+    then
+        eval PARAM_DEV_NAME=$`echo $OPTIND`
+        OPTIND=$((OPTIND + 1))
+    else
+        abort
+    fi
+done
+[ -z "$PARAM_DEV_NAME" -o -z "$PARAM_EMU_BUS" ] && abort
+[ "$PARAM_DEV_NAME" = "xvdd" ] && finish
+PARAM_DEV_NAME=$(echo -n "$PARAM_DEV_NAME" | sed "s;[0-9]*$;;g")
+
+emu_type="disk"
+emu_bus="$PARAM_EMU_BUS"
+
+
+###
+id_serial=$(echo "$PARAM_DEV_NAME" | sed -n '/^xvd[a-z]\+[0-9]*$/p' | sed "s;^xvd\([a-z]\+\)[0-9]*$;\1;g")
+[ -z "$id_serial" ] && abort
+if [ "$emu_bus" = "ata" ]
+then
+    emu_kernel="hd${id_serial}"
+    emu_model="QEMU_HARDDISK"
+elif [ "$emu_bus" = "scsi" ]
+then
+    emu_kernel="sd${id_serial}"
+    emu_model="SATA_QEMU_HARDDISK"
+else
+    abort
+fi
+
+###
+id_serial_num=0
+alpha_scale=1
+for n in `echo -n "$id_serial" | sed '/\n/!G;s/\(.\)\(.*\n\)/&\2\1/;//D;s/.//' | sed "s;\([a-z]\);\1 ;g"`
+do
+    id_serial_num=$(( id_serial_num + (`printf "%d" "'$n"` - `printf "%d" "'a"` + 1) * alpha_scale))
+    alpha_scale=$((alpha_scale * 26))
+done
+emu_serial="$(printf 'QM%05d' $id_serial_num)"
+
+### export information
+printf "EMU_TYPE='%s' \n" $emu_type
+printf "EMU_MODEL='%s' \n" $emu_model
+printf "EMU_SERIAL='%s' \n" $emu_serial
+printf "EMU_BUS='%s' \n" $emu_bus
+printf "EMU_KERNEL='%s' \n" $emu_kernel
+    
+if [ "$emu_bus" = "scsi" ]
+then
+    printf "EMU_BUS2='%s' \n" $(echo -n "$emu_bus" | sed "s;scsi;ata;g")
+    printf "EMU_MODEL2='%s' \n" $(echo -n "$emu_model" | sed "s;^SATA_;;g")
+else
+    printf "EMU_BUS2='' \n"
+    printf "EMU_MODEL2='' \n"
+fi

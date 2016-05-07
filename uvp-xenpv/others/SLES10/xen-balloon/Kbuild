@@ -1,0 +1,9 @@
+include $(M)/config.mk
+
+obj-m  = xen-balloon.o
+
+EXTRA_CFLAGS += -I$(M)/xen-platform-pci
+
+xen-balloon-objs =
+xen-balloon-objs += balloon.o
+xen-balloon-objs += sysfs.o

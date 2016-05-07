@@ -1,0 +1,8 @@
+#!/bin/sh
+case "$ACTION" in
+add)
+	devtype=$(cat /sys/$DEVPATH/devtype)
+#	echo -ne "\r\n### $0 debug: modprobe xen:$devtype ###\r\n" >/dev/console
+	modprobe xen:$devtype
+	;;
+esac

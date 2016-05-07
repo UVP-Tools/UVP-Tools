@@ -1,0 +1,4 @@
+include $(M)/config.mk
+
+obj-m  = xen-vmdq.o
+xen-vmdq-objs	:= netvmdq.o

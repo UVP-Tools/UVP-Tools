@@ -1,0 +1,4 @@
+EXTRA_CFLAGS := -I$(M)/include/
+obj-m := virtio.o virtio_ring.o virtio_pci.o
+obj-m += virtio_net.o 
+
