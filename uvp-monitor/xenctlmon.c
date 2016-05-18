@@ -1406,10 +1406,10 @@ void do_complete_restore_watch(void *handle)
         {
             SetScsiFeature(handle);
             write_pvops_flag(handle, "1");
-            write_service_flag(handle, "true");
             write_vmstate_flag(handle, "running");
             write_feature_flag(handle, "1");
         }
+        write_service_flag(handle, "true");
         INFO_LOG("complate restore, send ndp\n");
         (void)system("sh /etc/init.d/xenvnet-arp 2>/dev/null");
         write_to_file();
@@ -1446,7 +1446,7 @@ void do_complete_restore_watch(void *handle)
         (void)deal_hib_migrate_flag_file(hibernate_migrate_flag);
 
         /*if Linux OS is VSA, exec this shell after migrate*/
-        if(( ! access(PYTHON_PATH, R_OK)) && (0 == strcmp(migratestate, "2")))
+         if(( ! access(PYTHON_PATH, R_OK)) && (0 == strcmp(migratestate, "2")))
         {
             (void)system(EXEC_PYTHON_PATH);
         }
