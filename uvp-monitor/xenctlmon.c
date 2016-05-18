@@ -1446,7 +1446,7 @@ void do_complete_restore_watch(void *handle)
         (void)deal_hib_migrate_flag_file(hibernate_migrate_flag);
 
         /*if Linux OS is VSA, exec this shell after migrate*/
-         if(( ! access(PYTHON_PATH, R_OK)) && (0 == strcmp(migratestate, "2")))
+        if(( ! access(PYTHON_PATH, R_OK)) && (0 == strcmp(migratestate, "2")))
         {
             (void)system(EXEC_PYTHON_PATH);
         }
