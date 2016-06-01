@@ -53,7 +53,6 @@ int GetMMUseRatio(const char *mem_file, char *meminfo_buf, int size, char *swap_
     FILE *file;
     char tmp_buffer[TMP_BUFFER_SIZE + 1];
     char *start = NULL;
-    char *start_swap = NULL;
     unsigned long ulMemTotal = 0L;
     unsigned long ulMemFree = 0L;
     unsigned long ulMemBuffers = 0L;
