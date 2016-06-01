@@ -7,6 +7,13 @@
 TARGET := uvp-monitor
 CC     := gcc
 
+cpu_bit = $(shell getconf LONG_BIT)
+ifeq ($(cpu_bit), 32)
+	cpu_bit=32
+else
+	cpu_bit=64
+endif
+
 # for debug version, set DBG_FLAAG=y
 DBG_FLAG:=  
 
@@ -19,6 +26,11 @@ endif
 
 # don't provide pv-upgrade ability to user-compiled-pv vm
 CFLAGS += -DNOT_USE_PV_UPGRADE
+
+${TARGET}-${cpu_bit}: securec_api has_xs patch_xs
+	$(CC) -o $@ ${INC_FLAGS} main.c xenctlmon.c network.c netinfo.c memory.c cpuinfo.c xenstore_common.c hostname.c cpu_hotplug.c disk.c upgrade.c healthcheck.c check_kernel.c ${CFLAGS} libsecurec.a -L. -lxenstore 
+	$(CC) -o arping iputils/arping.c
+	$(CC) -o ndsend iputils/ndsend.c
 
 has_xs:
 	@if [ -d "xen-4.1.2/tools/xenstore" ]; then \
@@ -48,19 +60,10 @@ patch_xs:
 	fi
 
 securec_api:
-	@cd ./securec/; \
+	@cd ./securec/src/; \
 	make -f MakefileCustom securecstatic; \
+	cp libsecurec.a ../../libsecurec.a; \
 	cd -
-
-${TARGET}-64: securec_api has_xs patch_xs
-	$(CC) -o $@ ${INC_FLAGS} main.c xenctlmon.c network.c netinfo.c memory.c cpuinfo.c xenstore_common.c hostname.c cpu_hotplug.c disk.c upgrade.c healthcheck.c check_kernel.c ${CFLAGS} -lxenstore libsecurec.a -L.
-	$(CC) -o arping iputils/arping.c
-	$(CC) -o ndsend iputils/ndsend.c
-
-${TARGET}-32: securec_api has_xs patch_xs
-	$(CC) ${CFLAGS} -m32 -o $@ ${INC_FLAGS} -lxenstore main.c xenctlmon.c  network.c netinfo.c memory.c cpuinfo.c xenstore_common.c hostname.c cpu_hotplug.c disk.c upgrade.c healthcheck.c check_kernel.c libsecurec.a -L.
-	$(CC) -o arping iputils/arping.c
-	$(CC) -o ndsend iputils/ndsend.c
 
 install:
 	install -m544 uvp-monitor /usr/bin/
@@ -77,7 +80,7 @@ install:
 
 .PHONY: clean
 clean:
-	@cd ./securec/; \
+	@cd ./securec/src; \
 	make clean; \
 	cd -
 	@if [ -d "./xen-4.1.2/tools/xenstore" ]; then \
