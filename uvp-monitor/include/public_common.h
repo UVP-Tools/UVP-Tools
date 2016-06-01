@@ -40,7 +40,7 @@ extern "C" {
 
 #include <syslog.h>
 
-#define DEBUG_LOG(str) syslog(LOG_INFO,str)
+#define DEBUG_LOG(fmt, args...)                 syslog(LOG_DEBUG, fmt, ##args)
 #define INFO_LOG(fmt, args...)                  syslog(LOG_INFO, fmt, ##args)
 #define ERR_LOG(fmt, args...)                   syslog(LOG_ERR, "%s:%d:%s: " fmt, __FILE__, __LINE__, __func__, ##args)
 

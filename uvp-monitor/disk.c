@@ -1237,9 +1237,9 @@ int getDiskInfo(struct DevMajorMinor *devMajorMinor, int partNum, struct DiskInf
             if (statfsInfo.f_blocks > 0)
             {
                 /* 将每块的大小赋值给szFsBlockSize，将文件系统赋值给结构体数组的对应成员 */
-                (void)snprintf_s(szFsBlockSize, sizeof(szFsBlockSize), sizeof(szFsBlockSize), "%ld", statfsInfo.f_bsize);
+                (void)snprintf_s(szFsBlockSize, sizeof(szFsBlockSize), sizeof(szFsBlockSize), "%ld", (long)statfsInfo.f_bsize);
                 /* 剩余free的块数大小赋值给对应的变量 */
-                (void)snprintf_s(szFsFreeBlock, sizeof(szFsFreeBlock), sizeof(szFsFreeBlock), "%llu", statfsInfo.f_bfree);
+                (void)snprintf_s(szFsFreeBlock, sizeof(szFsFreeBlock), sizeof(szFsFreeBlock), "%lu", statfsInfo.f_bfree);
                 /* 使用数字型字符串乘法函数对剩余大小进行计算，并转换为KB */
                 (void)strMulti(szFsFreeBlock, szFsBlockSize, szFreeSize);
                 (void)unitTransfer(szFreeSize, UNIT_TRANSFER_CYCLE, szFreeSize);

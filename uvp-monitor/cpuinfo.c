@@ -323,7 +323,7 @@ char *pGetCPUUsage(char *pResult)
 
         pResultTmp = pResultTmp + shiftsize;
     }
-    (void)snprintf_s(pResultTmp, 1, 1, "\0");
+    (void)snprintf_s(pResultTmp, 1, 1, '\0');
 
     return SUCC;
 }

@@ -198,7 +198,7 @@ void set_guest_feature(void *handle)
     ret = uvpPopen(get_cfg_cmd, feature_str, SHELL_BUFFER);
     if(0 != ret)
     {
-        ERR_LOG("Failed to call uvpPopen 1, ret = %d.\n", feature_str);
+        ERR_LOG("Failed to call uvpPopen 1, ret = %s.\n", feature_str);
         return;
     }
     //Get name form CurrentOS error,maybe "NULL"
@@ -379,7 +379,7 @@ void set_tools_version(void *handle)
 
     if (NULL == dir)
     {
-        (void)mkdir(DIR_VERSION_TOOLS, 0750);
+        (void)mkdir(DIR_VERSION_TOOLS, 0640);
         return;
     }
 
@@ -1233,7 +1233,6 @@ Return     : -1 创建失败
 *****************************************************************************/
 int wait_for_thaw(void *handle, FsMountList *mounts)
 {
-    char logbuf[LOG_BUF_LEN] = {0};
     int thread = 0;
     pthread_t thread_id = 0;
     int ret = 0;
@@ -1255,10 +1254,8 @@ int wait_for_thaw(void *handle, FsMountList *mounts)
     thread = pthread_create(&thread_id, &attr, do_time_thaw, (void *)arg);
     if (strcmp(strerror(thread), "Success") != 0)
     {
-         ret = -1;
-        (void)memset_s(logbuf, LOG_BUF_LEN, 0, LOG_BUF_LEN);
-        (void)snprintf_s(logbuf, LOG_BUF_LEN, LOG_BUF_LEN, "Create do_time_thaw fail, errorno = %d !", thread);
-        DEBUG_LOG(logbuf);
+        ret = -1;
+        DEBUG_LOG("Create do_time_thaw fail, errorno = %d", thread);
         free(arg);
     }
 
@@ -2164,7 +2161,7 @@ Return     : None
 void do_cp_version_files()
 {
     char buf[BUFFER_SIZE] = {0};
-    //DEBUG_LOG("do_cp_version_files");
+
     if( 0 == access(FILE_PVDRIVER_VERSION_TMP, R_OK))
     {
         return;
@@ -2173,7 +2170,6 @@ void do_cp_version_files()
                     "mkdir -p %s 2>/dev/null;cp -f %s*_version.ini %s 2>/dev/null;",
                     DIR_VERSION_TOOLS_TMP, DIR_VERSION_TOOLS, DIR_VERSION_TOOLS_TMP);
     (void)exe_command(buf);
-    //DEBUG_LOG(buf);
 
     return;
 }
@@ -2246,9 +2242,7 @@ again:
     /* fork失败，退出 */
     if(cpid < 0)
     {
-        (void)memset_s(logbuf, LOG_BUF_LEN, 0, LOG_BUF_LEN);
-        (void)snprintf_s(logbuf, LOG_BUF_LEN, LOG_BUF_LEN, "Process fork cpid fail, errorno = %d!", cpid);
-        DEBUG_LOG(logbuf);
+        DEBUG_LOG("Process fork cpid fail, errorno = %d", cpid);
         exit(1);
     }
     /*做子进程的事*/
@@ -2291,10 +2285,7 @@ again:
                 sThread = pthread_create(&sthread_id, &attr, do_time_sync, (void *)handle);
                 if (strcmp(strerror(sThread), "Success") != 0)
                 {
-                    (void)memset_s(logbuf, LOG_BUF_LEN, 0, LOG_BUF_LEN);
-                    (void)snprintf_s(logbuf, LOG_BUF_LEN, LOG_BUF_LEN,
-                                    "Create do_time_sync fail, errorno = %d !", sThread);
-                    DEBUG_LOG(logbuf);
+                    DEBUG_LOG("Create do_time_sync fail, errorno = %d", sThread);
                     pthread_attr_destroy (&attr);
                     exit(1);
                 }
@@ -2310,9 +2301,7 @@ again:
         iThread = pthread_create(&pthread_id, &attr, do_monitoring, (void *)handle);
         if (strcmp(strerror(iThread), "Success") != 0)
         {
-            (void)memset_s(logbuf, LOG_BUF_LEN, 0, LOG_BUF_LEN);
-            (void)snprintf_s(logbuf, LOG_BUF_LEN, LOG_BUF_LEN, "Create do_monitoring fail, errorno = %d !", iThread);
-            DEBUG_LOG(logbuf);
+            DEBUG_LOG("Create do_monitoring fail, errorno = %d", iThread);
             pthread_attr_destroy (&attr);
             exit(1);
         }
@@ -2322,9 +2311,7 @@ again:
 
         if (strcmp(strerror(tThread), "Success") != 0)
         {
-            (void)memset_s(logbuf, LOG_BUF_LEN, 0, LOG_BUF_LEN);
-            (void)snprintf_s(logbuf, LOG_BUF_LEN, LOG_BUF_LEN, "Create do_tools_monitoring fail, errorno = %d !", tThread);
-            DEBUG_LOG(logbuf);
+            DEBUG_LOG("Create do_tools_monitoring fail, errorno = %d", tThread);
             pthread_attr_destroy (&attr);
             exit(1);
         }
@@ -2333,16 +2320,11 @@ again:
         mThread = pthread_create(&mthread_id, &attr, timing_monitor, (void *)handle);
         if (strcmp(strerror(mThread), "Success") != 0)
         {
-            (void)memset_s(logbuf, LOG_BUF_LEN, 0, LOG_BUF_LEN);
-            (void)snprintf_s(logbuf, LOG_BUF_LEN, LOG_BUF_LEN,
-                            "Create timing_monitor fail, try again. errorno = %d !", mThread);
-            DEBUG_LOG(logbuf);
+            DEBUG_LOG("Create timing_monitor fail, try again. errorno = %d", mThread);
             mThread = pthread_create(&mthread_id, &attr, timing_monitor, (void *)handle);
             if (strcmp(strerror(mThread), "Success") != 0)
             {
-                (void)memset_s(logbuf, LOG_BUF_LEN, 0, LOG_BUF_LEN);
-                (void)snprintf_s(logbuf, LOG_BUF_LEN, LOG_BUF_LEN,"Create timing_monitor fail, process exit. errorno = %d !", mThread);
-                DEBUG_LOG(logbuf);
+                DEBUG_LOG("Create timing_monitor fail, process exit. errorno = %d", mThread);
                 pthread_attr_destroy (&attr);
                 exit(1);
             }
