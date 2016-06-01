@@ -97,7 +97,7 @@ static void create_nd_packet(struct nd_packet* pkt)
 	pkt->router = 0;
 	pkt->reserved = 0;
 	memcpy(&pkt->target, &src_ipaddr, 16);
-	pkt->otype = ND_OPT_SOURCE_LINKADDR;
+	pkt->otype = ND_OPT_TARGET_LINKADDR;
 	pkt->ospace = 1;
 	memcpy(&pkt->obits, real_hwaddr, 6);
 }
