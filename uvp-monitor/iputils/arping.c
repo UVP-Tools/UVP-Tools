@@ -490,10 +490,6 @@ enum {
 	SYSFS_DEVATTR_IFINDEX,
 	SYSFS_DEVATTR_FLAGS,
 	SYSFS_DEVATTR_ADDR_LEN,
-#if 0
-	SYSFS_DEVATTR_TYPE,
-	SYSFS_DEVATTR_ADDRESS,
-#endif
 	SYSFS_DEVATTR_BROADCAST,
 	SYSFS_DEVATTR_NUM
 };
@@ -525,17 +521,6 @@ struct sysfs_devattrs {
 		.name		= "flags",
 		.handler	= sysfs_devattr_ulong_hex,
 	},
-#if 0
-	[SYSFS_DEVATTR_TYPE] = {
-		.name		= "type",
-		.handler	= sysfs_devattr_ulong_dec,
-	},
-	[SYSFS_DEVATTR_ADDRESS] = {
-		.name		= "address",
-		.handler	= sysfs_devattr_macaddr,
-		.free		= 1,
-	},
-#endif
 	[SYSFS_DEVATTR_BROADCAST] = {
 		.name		= "broadcast",
 		.handler	= sysfs_devattr_macaddr,
