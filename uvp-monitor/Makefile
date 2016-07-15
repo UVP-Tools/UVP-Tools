@@ -67,12 +67,20 @@ securec_api:
 	cd -
 
 install:
-	install -m544 uvp-monitor /usr/bin/
+	install -m544 uvp-monitor-${cpu_bit} /usr/bin/
 	install -m544 ./xen-4.1.2/tools/xenstore/libxenstore.so.3.0.0 /usr/lib
 	@cd /usr/lib; \
 	ln -sf libxenstore.so.3.0.0 libxenstore.so.3.0; \
 	ln -sf libxenstore.so.3.0.0 libxenstore.so; \
 	cd -
+	install -m544 monitor/uvp-monitor /etc/init.d/
+	@ln -sf /etc/init.d/uvp-monitor /etc/rc.d/rc3.d/S99uvp-monitor
+	@ln -sf /etc/init.d/uvp-monitor /etc/rc.d/rc3.d/K99uvp-monitor
+	@ln -sf /etc/init.d/uvp-monitor /etc/rc.d/rc5.d/S99uvp-monitor
+	@ln -sf /etc/init.d/uvp-monitor /etc/rc.d/rc5.d/K99uvp-monitor
+
+install_static:
+	install -m544 uvp-monitor-${cpu_bit}-static /usr/bin/
 	install -m544 monitor/uvp-monitor /etc/init.d/
 	@ln -sf /etc/init.d/uvp-monitor /etc/rc.d/rc3.d/S99uvp-monitor
 	@ln -sf /etc/init.d/uvp-monitor /etc/rc.d/rc3.d/K99uvp-monitor
