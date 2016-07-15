@@ -29,6 +29,7 @@ CFLAGS += -DNOT_USE_PV_UPGRADE
 
 ${TARGET}-${cpu_bit}: securec_api has_xs patch_xs
 	$(CC) -o $@ ${INC_FLAGS} main.c xenctlmon.c network.c netinfo.c memory.c cpuinfo.c xenstore_common.c hostname.c cpu_hotplug.c disk.c upgrade.c healthcheck.c check_kernel.c ${CFLAGS} libsecurec.a -L. -lxenstore 
+	$(CC) -o $@-static ${INC_FLAGS} main.c xenctlmon.c network.c netinfo.c memory.c cpuinfo.c xenstore_common.c hostname.c cpu_hotplug.c disk.c upgrade.c healthcheck.c check_kernel.c ${CFLAGS} libsecurec.a -L. libxenstore.a -L.
 	$(CC) -o arping iputils/arping.c
 	$(CC) -o ndsend iputils/ndsend.c
 
@@ -89,5 +90,6 @@ clean:
 		cd -; \
 	fi
 	rm -f libsecurec.a
+	rm -f libxenstore.a
 	rm -f $(TARGET)-* 
 	rm -f *.o arping ndsend

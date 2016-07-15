@@ -9,6 +9,8 @@ diff -uraN xen-4.1.2.orig/tools/xenstore/Makefile xen-4.1.2/tools/xenstore/Makef
 +	gcc  -DPIC -O2 -fomit-frame-pointer -fno-strict-aliasing -std=gnu99 -Wall -Wstrict-prototypes -falign-functions=32 -Wno-unused-value -Wdeclaration-after-statement  -D__XEN_TOOLS__ -MMD -MF .xs.opic.d  -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE  -Werror -g -O0 -I.  -DUSE_PTHREAD -fPIC -c -o xs.opic xs.c
 +	gcc  -DPIC -O2 -fomit-frame-pointer -fno-strict-aliasing -std=gnu99 -Wall -Wstrict-prototypes -falign-functions=32 -Wno-unused-value -Wdeclaration-after-statement  -D__XEN_TOOLS__ -MMD -MF .xs_lib.opic.d  -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE  -Werror -g -O0 -I.  -fPIC -c -o xs_lib.opic xs_lib.c
 +	gcc -O2 -fomit-frame-pointer -fno-strict-aliasing -std=gnu99 -Wall -Wstrict-prototypes -falign-functions=32 -Wno-unused-value -Wdeclaration-after-statement  -D__XEN_TOOLS__ -MMD -MF .libxenstore.so.3.0.0.d  -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE  -Werror -g -O0 -I.     -Wl,--no-as-needed -Wl,-soname -Wl,libxenstore.so.3.0 -shared -o libxenstore.so.3.0.0 xs.opic xs_lib.opic  -lpthread
++	ar rcs libxenstore.a xs.opic xs_lib.opic
++	cp -f libxenstore.a ../../..
 +	ln -sf libxenstore.so.3.0.0 libxenstore.so.3.0
 +	ln -sf libxenstore.so.3.0 libxenstore.so
 +	gcc -O2 -fomit-frame-pointer -fno-strict-aliasing -std=gnu99 -Wall -Wstrict-prototypes -falign-functions=32 -Wno-unused-value -Wdeclaration-after-statement  -D__XEN_TOOLS__ -MMD -MF .xenstore.d  -D_LARGEFILE_SOURCE -D_LARGEFILE64_SOURCE  -Werror -g -O0 -I.     -Wl,--no-as-needed xenstore_client.o -L. -lxenstore  -o xenstore
