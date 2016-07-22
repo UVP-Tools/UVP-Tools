@@ -83,15 +83,18 @@ Installing UVP Tools
         make
 
         Note:
-	(1). When uvp-monitor is being built, the make tool automatically downloads the xen-4.1.2.tar.gz source code package from the Internet. If the download fails, uvp-monitor cannot be successfully built. If the Linux VM cannot access the Internet, manually obtain the xen-4.1.2.tar.gz source code package, and save it to the uvp-monitor directory.
+        (1). When uvp-monitor is being built, the make tool automatically downloads the xen-4.1.2.tar.gz source code package from the Internet. If the download fails, uvp-monitor cannot be successfully built. If the Linux VM cannot access the Internet, manually obtain the xen-4.1.2.tar.gz source code package, and save it to the uvp-monitor directory.
+
         (2). The uvp-monitor program used to statically build the libxenstore is provided along with the UVP Tools. Using such a uvp-monitor program can avoid the uvp-monitor failure due to defects in the default libxenstore.so shared library file of the Linux-based VM. For example, the default libxenstore.so file of the CoreOS 1010.5.0-based VM is defective and its directory /usr cannot be modified. To address this problem, install the uvp-monitor program that is used to statically build the libxenstore.
 
     To install the uvp-monitor that is used to dynamically build the libxenstore, run the following command:
+
         make install
     To install the uvp-monitor that is used to statically build the libxenstore, run the following command:
+
         make install_static
 
-        Note: If you need to build the uvp-monitor in a cross-compilation environment, put the source code of the uvp-monitor in the cross-compilation environment, and then install the built uvp-monitor on the target VM.
+    Note: If you need to build the uvp-monitor in a cross-compilation environment, put the source code of the uvp-monitor in the cross-compilation environment, and then install the built uvp-monitor on the target VM.
 
 
   - Build the Xen front-end driver. Take SLES 11 SP3 x86_64 as an example.
