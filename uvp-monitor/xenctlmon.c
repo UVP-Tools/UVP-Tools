@@ -40,7 +40,7 @@
 #include <sys/utsname.h>
 #include "securec.h"
 #include "check_kernel.h"
-
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include "uvpmon.h"
 
@@ -145,6 +145,10 @@ int gfreezeflag = 0;
 char chret[CMD_RESULT_BUF_LEN];
 char feature_str[SHELL_BUFFER];
 
+/* VRM is based on SLES */
+#define VRM_VERSION "/etc/os_version"
+#define SUSE_VERSION "/etc/SuSE-release"
+#define VRM_FLAG "control/uvp/vrm_flag"
 
 
 /* 虚拟机心跳*/
@@ -179,6 +183,24 @@ pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 char fReboot = '0';
 
+/*****************************************************************************
+ Function   : write_vrm_flag
+ Description:  note vm is vrm
+ Input      : phandle -- xenstore file handle
+ Output     : None
+ Return     : None
+*****************************************************************************/
+void write_vrm_flag(void *phandle)
+{
+    if (NULL == phandle) {
+        return;
+    }
+
+    if((0 == access(VRM_VERSION, R_OK)) && (0 == access(SUSE_VERSION, R_OK))) {
+        INFO_LOG("This is VRM.\n");
+        write_to_xenstore(phandle, VRM_FLAG, "true");
+    }
+}
 
 void set_guest_feature(void *handle)
 {
@@ -868,7 +890,7 @@ void *timing_monitor(void *handle)
     xb_write_first_flag = 0;
     do_watch_functions(handle);
 
-    if(0 == access("/proc/xen/version",R_OK))
+    if(0 == access("/proc/xen/version", R_OK) || 0 == access("/proc/xen_version", R_OK))
     {
         /*upgrade from V1,procfs do not provide weakwrite function before vm reboot*/
         UpgradeOldVerFile = fopen(FILE_OLD_VERSION,"r");
@@ -913,7 +935,7 @@ void *timing_monitor(void *handle)
     /* 正在运行状态标志位*/
     write_vmstate_flag(handle, "running");
     /* 写入 PV OPS 内核标志位 */
-    if ( ! access("/proc/xen/version", R_OK) )
+    if ( ! access("/proc/xen/version", R_OK) || ! access("/proc/xen_version", R_OK))
     {
         write_pvops_flag(handle, "1");
     }
@@ -1399,14 +1421,18 @@ void do_complete_restore_watch(void *handle)
     if((NULL != migratestate) && \
             ((0 == strcmp(migratestate, "1")) || (0 == strcmp(migratestate, "2"))))
     {
-        if ( ! access("/proc/xen/version", R_OK) )
+        if ( ! access("/proc/xen/version", R_OK) || ! access("/proc/xen_version", R_OK))
         {
             SetScsiFeature(handle);
             write_pvops_flag(handle, "1");
+            write_service_flag(handle, "true");
             write_vmstate_flag(handle, "running");
             write_feature_flag(handle, "1");
+            
+            INFO_LOG("modify_swappiness.sh restore in PVOPS GuestOS\n");
+            (void)system("sh /etc/.uvp-monitor/modify_swappiness.sh restore 2>/dev/null");
         }
-        write_service_flag(handle, "true");
+        write_vrm_flag(handle);
         INFO_LOG("complate restore, send ndp\n");
         (void)system("sh /etc/init.d/xenvnet-arp 2>/dev/null");
         write_to_file();
@@ -1451,7 +1477,7 @@ void do_complete_restore_watch(void *handle)
     
     if((NULL != migratestate) && ((0 == strcmp(migratestate, "3")) ))
     {
-        if ( ! access("/proc/xen/version", R_OK) )
+        if ( ! access("/proc/xen/version", R_OK) || ! access("/proc/xen_version", R_OK) )
         {
             write_service_flag(handle, "true");
         }
@@ -2223,7 +2249,6 @@ void init_daemon()
     char  *timeFlag = NULL;
     pthread_t sthread_id;
     char buf;
-    char logbuf[LOG_BUF_LEN] = {0};
     void *handle;
     g_disable_exinfo_value = 0;
     g_exinfo_flag_value = 0;
@@ -2239,6 +2264,11 @@ again:
         exit(1);
     }
     cpid = fork();
+    DEBUG_LOG("Mlock uvp-monitor memory.");
+    iRet = mlockall(MCL_CURRENT|MCL_FUTURE);
+    if(iRet != 0){
+		 ERR_LOG("Mlock uvp-monitor memory failed, errno = %d.", errno);
+    }
     /* fork失败，退出 */
     if(cpid < 0)
     {
@@ -2265,6 +2295,9 @@ again:
         /*set ipv6 info value*/
         set_netinfo_flag(handle);
         set_guest_feature(handle);
+
+        /* is vrm */
+        write_vrm_flag(handle);
 
         pthread_attr_init(&attr);
         pthread_attr_setdetachstate (&attr, PTHREAD_CREATE_DETACHED);
