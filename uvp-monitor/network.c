@@ -1004,73 +1004,7 @@ int getXenVif(char *vifname)
     fclose(pFileVer);
     return 0;
 }
-#if 0
 
-/*****************************************************************************
-Function   : rebondSriovnet
-Description: 热迁移或者休眠后把检测到的直通网卡后，
-                   然后把新的直通网卡bond进去
-Input       :
-Output     : 
-Return     : 
-*****************************************************************************/
-void rebondSriovnet(int bond_count)
-{
-    int iRet = 0;
-    char pszCommand[MAX_COMMAND_LENGTH] = {0};
-    char pszBuff[MAX_COMMAND_LENGTH] = {0};
-
-    INFO_LOG("---------->>>>rebondSriovnet--->>> BoundInfo.count = %d \n",BoundInfo.count);
-    INFO_LOG("rebondSriovnet:BoundInfo.info[%d].sriov_mac = %s\n",bond_count,BoundInfo.info[bond_count].sriov_mac);
-    INFO_LOG("rebondSriovnet:BoundInfo.info[%d].sriov_vifname = %s\n",bond_count,BoundInfo.info[bond_count].sriov_vifname);
-    INFO_LOG("rebondSriovnet:BoundInfo.info[%d].mac = %s\n",bond_count,BoundInfo.info[bond_count].mac);
-    INFO_LOG("rebondSriovnet:BoundInfo.info[%d].vifname = %s\n",bond_count,BoundInfo.info[bond_count].vifname);
-
-    (void)memset_s(pszCommand, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
-    (void)memset_s(pszBuff, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
-    (void)snprintf_s(pszCommand, MAX_COMMAND_LENGTH, MAX_COMMAND_LENGTH,
-                    "ifconfig %s down", BoundInfo.info[bond_count].sriov_vifname);
-    iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
-    if (0 != iRet)
-    {
-        (void)ERR_LOG("rebondSriovnet: call uvpPopen pszCommand=%s Fail ret = %d \n",pszCommand, iRet);
-        //return;
-    }
-
-    (void)memset_s(pszCommand, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
-    (void)memset_s(pszBuff, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
-    (void)snprintf_s(pszCommand, MAX_COMMAND_LENGTH, MAX_COMMAND_LENGTH,
-                    "echo +%s > /sys/class/net/%s/bonding/slaves",
-                    BoundInfo.info[bond_count].sriov_vifname,BoundInfo.info[bond_count].bondname);
-    iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
-    if (0 != iRet)
-    {
-        (void)ERR_LOG("rebondSriovnet: call uvpPopen pszCommand=%s Fail ret = %d \n",pszCommand, iRet);
-    }     
-    (void)memset_s(pszCommand, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
-    (void)memset_s(pszBuff, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
-    (void)snprintf_s(pszCommand, MAX_COMMAND_LENGTH, MAX_COMMAND_LENGTH,
-                    "ifconfig %s up", BoundInfo.info[bond_count].sriov_vifname);
-    iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
-    if (0 != iRet)
-    {
-        (void)ERR_LOG("rebondSriovnet: call uvpPopen pszCommand=%s Fail ret = %d \n",pszCommand, iRet);
-    }
-    (void)memset_s(pszCommand, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
-    (void)memset_s(pszBuff, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
-    //(void)snprintf_s(pszCommand, 1024, 1024, 
-                    "echo %s >  /sys/class/net/bond%d/bonding/primary", BoundInfo.info[j].sriov_vifname,j);
-    (void)snprintf_s(pszCommand, MAX_COMMAND_LENGTH, MAX_COMMAND_LENGTH,
-                    "echo %s >  /sys/class/net/%s/bonding/primary", 
-                    BoundInfo.info[bond_count].sriov_vifname,BoundInfo.info[bond_count].bondname);
-    iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
-    if (0 != iRet)
-    {
-        (void)ERR_LOG("rebondSriovnet: call uvpPopen pszCommand=%s Fail ret = %d \n",pszCommand, iRet);
-    }   
-    INFO_LOG("----------<<<<--rebondSriovnet \n");
-}
-#endif
 /*****************************************************************************
 Function   : getVifNameFromBond
 Description: 从bond中获取网卡名,然后判断是不是xen vif 网卡
@@ -1654,74 +1588,6 @@ int releasenetbond(void *handle)
     write_to_xenstore(handle, RELEASE_BOND, "2");
     return 1;
 }
-#if 0
-/*****************************************************************************
-Function   : ReGetSriovNicInfo
-Description: 
-Input       :handle   -- xenstore句柄
-Output     : 
-Return     : SUCC OR ERROR
-*****************************************************************************/
-int ReGetSriovNicInfo()
-{
-    int num;
-    int sriov_num;
-    int i,j;
-    char left_mac[18];
-    char right_mac[18];
-    char left_mac_1[18];
-    char right_mac_1[18];   
-
-    num =  getVifInfo_forbond();
-    INFO_LOG("---------->>>>ReGetSriovNicInfo--->>> num = %d \n",num);
-    if (0 == num)
-    {
-        INFO_LOG("getVifInfo_forbond fail  num = %d \n",num);
-        return -1;
-    }
-
-    //BoundInfo.count = 0;
-    sriov_num = 0;
-    for (i = 0; i < BoundInfo.count; i++)
-    {
-        printf("gtNicInfo.info[%d].mac = %s\n",i,BoundInfo.info[i].mac);
-        printf("gtNicInfo.info[%d].ifname = %s\n",i,BoundInfo.info[i].vifname); 
-
-        left(left_mac,(char *)BoundInfo.info[i].mac,8);
-        right(right_mac,(char *)BoundInfo.info[i].mac,8);
-        printf("i = %d\n",i);
-        for(j=0;j<num;j++)
-        {
-           if(strcmp((char *)BoundInfo.info[i].mac, (char *)gtNicInfo_bond.info[j].mac) == 0)
-           {
-                printf("BoundInfo.info[i].mac=%s ,gtNicInfo_bond.info[j].mac=%s\n",BoundInfo.info[i].mac,gtNicInfo_bond.info[j].mac);
-                continue;
-           }
-           left(left_mac_1,(char *)gtNicInfo_bond.info[j].mac,8);
-           right(right_mac_1,(char *)gtNicInfo_bond.info[j].mac,8);
-
-           if((strcmp(right_mac, right_mac_1) == 0)&&(strcmp(left_mac_1, NORMAL_NIC))&&(strcmp(BoundInfo.info[i].vifname, gtNicInfo_bond.info[j].ifname)))
-           {
-                printf("this is the sriov nic mac \n");
-                strncpy_s(BoundInfo.info[i].sriov_mac, MAC_NAME_LENGTH, gtNicInfo_bond.info[j].mac, sizeof(gtNicInfo_bond.info[j].mac)-1);
-                strncpy_s(BoundInfo.info[i].sriov_vifname, VIF_NAME_LENGTH, gtNicInfo_bond.info[j].ifname, sizeof(gtNicInfo_bond.info[j].ifname)-1);
-                sriov_num++;
-           }
-           memset_s(left_mac_1,18,0,18);
-           memset_s(right_mac_1,18,0,18);
-        }
-        memset_s(left_mac,18,0,18);
-        memset_s(right_mac,18,0,18);
-    }
-    if(sriov_num < BoundInfo.count)
-    {
-        INFO_LOG("there is no enough sriov net \n");
-        return -1;
-    }
-    INFO_LOG("----------<<<<--ReGetSriovNicInfo \n");
-    return sriov_num;
-}
-#endif
 
 /*****************************************************************************
 Function   : ReGetSriovNicInfo
@@ -1805,21 +1671,7 @@ int rebondnet(void *handle)
     char pszCommand[MAX_COMMAND_LENGTH] = {0};
     char pszBuff[MAX_COMMAND_LENGTH] = {0};
     INFO_LOG("rebondnet BoundInfo.count = %d ",BoundInfo.count);
-    #if 0
-    for(i=0;i<BoundInfo.count;i++)
-    {
 
-        (void)memset_s(pszCommand, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
-        (void)memset_s(pszBuff, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
-        (void)snprintf_s(pszCommand, MAX_COMMAND_LENGTH, MAX_COMMAND_LENGTH,
-                        "echo -%s > /sys/class/net/bond%d/bonding/slaves", BoundInfo.info[i].sriov_vifname,i);
-        iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
-        if (0 != iRet)
-        {
-            (void)ERR_LOG("rebondnet: call uvpPopen pszCommand=%s Fail ret = %d \n",pszCommand, iRet);
-        }   
-    }
-    #endif
     (void)sleep(2);
     (void)ReGetSriovNicInfo();
     for(j=0;j<BoundInfo.count;j++)
