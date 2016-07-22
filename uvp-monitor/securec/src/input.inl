@@ -63,11 +63,15 @@
 #endif
 
 #if defined(SECUREC_VXWORKS_PLATFORM) && !defined(va_copy) && !defined(__va_copy)
-#if defined(SECUREC_VXWORKS_VERSION_5_4)
-#define __va_copy(d, s) {if(1 == va_copy_flag){memcpy(d,s, sizeof(va_list));}else{memcpy(&d, &s, sizeof(va_list));}}
-#else
-#define __va_copy(d, s) memcpy(&d,  &s, sizeof(va_list));
-#endif
+#define __va_copy(d,s) {\
+                            size_t size_of_d = (size_t)sizeof(d);\
+                            size_t size_of_s = (size_t)sizeof(s);\
+                            if(size_of_d != size_of_s){\
+                                (void)memcpy(d,s, sizeof(va_list));\
+                            }else{\
+                                (void)memcpy(&d, &s, sizeof(va_list));\
+                            }\
+                         }
 #endif
 
 #if (defined(_MSC_VER)) && (_MSC_VER >= 1400)
@@ -313,22 +317,7 @@ void clearDestBuf(const char* buffer,const char* cformat, va_list arglist)
     int spec = 0;  
     signed char wideChar = 0; 
     char doneFlag = 0;
-    
-#if defined(SECUREC_VXWORKS_VERSION_5_4)
-    int va_copy_flag = 0;
-    int size_of_arglist =  sizeof(arglist);
-    int size_of_va_list =  sizeof(va_list);
-
-    if(size_of_arglist  != size_of_va_list)
-    {
-        va_copy_flag = 1;
-    }
-    else
-    {
-        va_copy_flag = 0;
-    }
-#endif
-    
+      
     if (fmt != NULL)/*lint !e944*/
     {
         while (*fmt) /*lint !e944*/
@@ -434,19 +423,11 @@ void clearDestBuf(const char* buffer,const char* cformat, va_list arglist)
 #else
                 arglistsave = arglist;
 #endif
-                pDestBuf = (void*)va_arg(arglist, void*); /*lint !e826 !e64 !e10*/
+                pDestBuf = (void*)va_arg(arglistsave, void*); /*lint !e826 !e64 !e10*/
                 /* Get the next argument - size of the array in characters */
-                bufSize = ((size_t)(va_arg(arglist, size_t))) & 0xFFFFFFFFUL; ; /*lint !e826 !e48 !e516 !e530 !e78*/
+                bufSize = ((size_t)(va_arg(arglistsave, size_t))) & 0xFFFFFFFFUL; ; /*lint !e826 !e48 !e516 !e530 !e78*/
                 
-#if defined(va_copy)
-                        va_copy(arglist, arglistsave);
-                        va_end(arglistsave);
-#elif defined(__va_copy) /*for vxworks*/
-                        __va_copy(arglist, arglistsave);
-                        va_end(arglistsave);
-#else
-                         arglist = arglistsave;
-#endif
+                va_end(arglistsave);
 
                 if(0 == bufSize || bufSize >  SECUREC_STRING_MAX_LEN || !pDestBuf)
                 {
@@ -502,7 +483,7 @@ int securec_input_s (SEC_FILE_STREAM* stream, const char* cformat, va_list argli
 #if _INTEGRAL_MAX_BITS >= 64
     UINT64T num64 = 0;                     
 #if (defined(COMPATIBLE_LINUX_FORMAT) && !(defined(__UNIX)))
-    UINT64T beyondMax = 0;
+    int  beyondMax = 0;
     UINT64T num64as = 0;
 #endif
 #endif                                     
@@ -537,11 +518,7 @@ int securec_input_s (SEC_FILE_STREAM* stream, const char* cformat, va_list argli
 #if defined(va_copy) || defined(__va_copy)
     int arglistBeenCopied = 0;
 #endif
-#if defined(SECUREC_VXWORKS_VERSION_5_4)
-    int va_copy_flag = 0; /*0 array copy   1 pointer copy*/
-    int size_of_arglist =  sizeof(arglist);
-    int size_of_va_list =  sizeof(va_list);
-#endif
+
 
 #ifndef _UNICODE
     wchar_t wctemp = L'\0';
@@ -567,17 +544,6 @@ int securec_input_s (SEC_FILE_STREAM* stream, const char* cformat, va_list argli
     count = charCount = match = 0;
     (void)memset(&arglistsave, 0, sizeof(arglistsave));/*lint !e545*/
     
-#if defined(SECUREC_VXWORKS_VERSION_5_4)
-    if(size_of_arglist  != size_of_va_list)
-    {
-        va_copy_flag = 1;
-    }
-    else
-    {
-        va_copy_flag = 0;
-    }
-#endif
-
     while (format != NULL && *format) /*lint !e944*/
     {
         /* coverity[returned_null] */
@@ -614,6 +580,9 @@ int securec_input_s (SEC_FILE_STREAM* stream, const char* cformat, va_list argli
             longone = 1;
 
 #if _INTEGRAL_MAX_BITS >= 64
+#if (defined(COMPATIBLE_LINUX_FORMAT) && !(defined(__UNIX)))
+            beyondMax = 0;
+#endif
             integer64 = 0;
             num64 = 0;
 #endif  
@@ -647,9 +616,6 @@ int securec_input_s (SEC_FILE_STREAM* stream, const char* cformat, va_list argli
                             {
                                 format += 2;
                                 ++integer64;
-#if (defined(COMPATIBLE_LINUX_FORMAT) && !(defined(__UNIX)))
-                                beyondMax = 0;
-#endif
                                 break;
                             }
                             else if ( (*(format + 1) == _T('3')) &&
@@ -668,9 +634,6 @@ int securec_input_s (SEC_FILE_STREAM* stream, const char* cformat, va_list argli
                                 if (sizeof(void*) == sizeof(INT64T))   /*lint !e774*/
                                 {
                                     ++integer64;
-#if (defined(COMPATIBLE_LINUX_FORMAT) && !(defined(__UNIX)))
-                                    beyondMax = 0;
-#endif
                                 }
                                 break;
                             }
@@ -678,9 +641,6 @@ int securec_input_s (SEC_FILE_STREAM* stream, const char* cformat, va_list argli
                             if (sizeof(void*) == sizeof(INT64T))  /*lint !e774*/
                             {
                                 ++integer64;
-#if (defined(COMPATIBLE_LINUX_FORMAT) && !(defined(__UNIX)))
-                                beyondMax = 0;
-#endif
                             }
                             goto DEFAULT_LABEL; /*lint !e801*/
 #endif  /* _INTEGRAL_MAX_BITS >= 64    */
@@ -688,9 +648,6 @@ int securec_input_s (SEC_FILE_STREAM* stream, const char* cformat, va_list argli
                         case _T('j') :
                             longone += 2;
                             ++integer64;
-#if (defined(COMPATIBLE_LINUX_FORMAT) && !(defined(__UNIX)))
-                            beyondMax = 0;
-#endif
                             break;
                         case _T('t') :
 #endif
@@ -699,9 +656,6 @@ int securec_input_s (SEC_FILE_STREAM* stream, const char* cformat, va_list argli
 #ifdef SECUREC_ON_64BITS
                             ++longone;
                             ++integer64;
-#if (defined(COMPATIBLE_LINUX_FORMAT) && !(defined(__UNIX)))
-                            beyondMax = 0;
-#endif
 #endif
                             break;
                         case _T('L') :                            
@@ -709,9 +663,6 @@ int securec_input_s (SEC_FILE_STREAM* stream, const char* cformat, va_list argli
                             longone += 2;
 #if LONGLONG_IS_INT64
                             ++integer64;
-#if (defined(COMPATIBLE_LINUX_FORMAT) && !(defined(__UNIX)))
-                            beyondMax = 0;
-#endif
 #endif
                             break;
 
@@ -722,9 +673,6 @@ int securec_input_s (SEC_FILE_STREAM* stream, const char* cformat, va_list argli
 #if LONGLONG_IS_INT64   /*LSD change from #ifdef to #if*/
                                 ++integer64;
                                 longone += 2;
-#if (defined(COMPATIBLE_LINUX_FORMAT) && !(defined(__UNIX)))
-                                beyondMax = 0;
-#endif
                                 break;
 #else  /* LONGLONG_IS_INT64 */
                                 ++longone;
@@ -735,7 +683,9 @@ int securec_input_s (SEC_FILE_STREAM* stream, const char* cformat, va_list argli
                             {
                                 ++longone;
 #ifdef SECUREC_ON_64BITS
+#if  !(defined(COMPATIBLE_WIN_FORMAT)) /*on window 64 system sizeof long is 32bit */
                                 ++integer64;
+#endif
 #endif
                                 /* NOBREAK */
                             }
@@ -2124,6 +2074,9 @@ error_return:
         va_end(arglist);
     }
 #endif
+    va_end(arglistsave);
+
+
     /*LSD 2014.3.6 add, clear the stack data*/
     (void)memset_s(floatstring, (_CVTBUFSIZE + 1) * sizeof(_TCHAR), 0 ,  (_CVTBUFSIZE + 1) * sizeof(_TCHAR) );
     if (malloc_FloatStrFlag == 1)

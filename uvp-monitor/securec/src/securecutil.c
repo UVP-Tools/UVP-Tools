@@ -66,16 +66,17 @@ int wctomb(char *s, wchar_t wc) { return wcrtomb(s,wc,NULL); }
 int mbtowc(wchar_t *pwc, const char *s, size_t n) { return mbrtowc(pwc, s, n, NULL); }
 #endif
 
-/*verNumber<->verStr like:0X502<->SPC002;0X503<->SPC003...;0X510<->SPC010;0X511<->SPC011...*/
+/*SPC verNumber<->verStr like:0X201<->C01;0X202<->SPC001;0X502<->SPC002;0X503<->SPC003...;0X510<->SPC010;0X511<->SPC011...*/
+/*CP  verNumber<->verStr like:0X601<->CP0001;0X602<->CP0002...;*/
 void getHwSecureCVersion(char* verStr, int bufSize, unsigned short* verNumber)
 {
     if (verStr != NULL && bufSize > 0 )
     {
-       (void)strcpy_s(verStr, (size_t)bufSize, "Huawei Secure C V100R001C01SPC003");
+       (void)strcpy_s(verStr, (size_t)bufSize, "Huawei Secure C V100R001C01SPC004");
     }
     if (verNumber != NULL)
     {
-        *verNumber = (5 << 8 | 3);/*high Num << 8 | num of spc Ver*/
+        *verNumber = (5 << 8 | 4);/*high Num << 8 | num of Ver*/
     }
 }
 

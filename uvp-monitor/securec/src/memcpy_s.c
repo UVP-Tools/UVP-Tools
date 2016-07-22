@@ -259,6 +259,46 @@ errno_t memcpy_s(void* dest, size_t destMax, const void* src, size_t count)
         ) ) 
 #endif
     {
+#if defined(SECUREC_MEMCOPY_WITH_PERFORMANCE)
+        if (count > SECURE_MEMCOPY_THRESHOLD_SIZE) 
+        {
+#endif
+            /*large enough, let system API do it*/
+#ifdef USE_ASM
+            memcpy_opt(dest, src, count);
+#else
+            (void)memcpy(dest, src, count);
+#endif
+            return EOK;
+            
+#if defined(SECUREC_MEMCOPY_WITH_PERFORMANCE)            
+        }
+        else 
+        {
+            SMALL_MEM_COPY;
+            return EOK;
+        }
+#endif        
+    }
+    else
+    {
+        /* meet some runtime violation, return error code */
+        SECC_RET_MEMCPY_ECODE
+    }
+}
+
+
+#if defined(WITH_PERFORMANCE_ADDONS) 
+
+errno_t memcpy_sOptAsm(void* dest, size_t destMax, const void* src, size_t count)
+{
+    if (LIKELY( count <= destMax && dest && src   /*&& dest != src*/  
+        && destMax <= SECUREC_MEM_MAX_LEN 
+        && count > 0
+        && ( (dest > src  &&  (void*)((UINT8T*)src  + count) <= dest) ||
+        (src  > dest &&  (void*)((UINT8T*)dest + count) <= src) )
+        ) ) 
+    {
         if (count > SECURE_MEMCOPY_THRESHOLD_SIZE) 
         {
             /*large enough, let system API do it*/
@@ -281,9 +321,6 @@ errno_t memcpy_s(void* dest, size_t destMax, const void* src, size_t count)
         SECC_RET_MEMCPY_ECODE
     }
 }
-
-
-#if defined(WITH_PERFORMANCE_ADDONS) 
 
 /*trim judgement on "destMax <= SECUREC_MEM_MAX_LEN"  */
 errno_t memcpy_sOptTc(void* dest, size_t destMax, const void* src, size_t count)

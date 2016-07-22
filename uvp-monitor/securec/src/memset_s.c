@@ -40,7 +40,7 @@
 
 /*assemble language memset*/
 extern void* memset_opt(void* d, int c, size_t cnt);
-
+#if defined(WITH_PERFORMANCE_ADDONS) || defined(SECUREC_MEMSET_WITH_PERFORMANCE)
 static const MY_STR32 myStr = {{'\0','\0','\0','\0','\0','\0','\0','\0','\0','\0','\0','\0','\0','\0','\0','\0','\0','\0','\0','\0','\0','\0','\0','\0','\0','\0','\0','\0','\0','\0','\0','\0'}}; /*static variable always set zero*/ /*lint !e784 */
 static const MY_STR32 myStrAllFF ={{'\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\xFF'}}; /*lint !e784 */
 
@@ -173,7 +173,7 @@ static const MY_STR32 myStrAllFF ={{'\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\
     SECURE_MEMSET_CONST(2,pcDest,c)\
     SECURE_MEMSET_CONST(1,pcDest,c)\
     }
-
+#endif
 #define SECC_RET_MEMSET_ECODE   \
     if (destMax == 0 || destMax > SECUREC_MEM_MAX_LEN ) \
     { \
@@ -194,6 +194,46 @@ static const MY_STR32 myStrAllFF ={{'\xFF','\xFF','\xFF','\xFF','\xFF','\xFF','\
     return EOK;
 
 errno_t memset_s(void* dest, size_t destMax, int c, size_t count)
+{
+    if (LIKELY(count <= destMax  && dest  && destMax <= SECUREC_MEM_MAX_LEN )) 
+    {
+#if defined(SECUREC_MEMSET_WITH_PERFORMANCE)    
+        if (count > SECURE_MEMSET_THRESHOLD_SIZE) 
+        {
+#endif        
+#ifdef USE_ASM
+            (void)memset_opt(dest, c, count);
+#else
+            (void)memset(dest, c, count);
+#endif
+            return EOK;
+#if defined(SECUREC_MEMSET_WITH_PERFORMANCE)            
+        }
+        else
+        {
+            if (SC_ADDR_ALIGNED(dest) ) 
+            { 
+                /*use struct assignment*/ 
+                SC_ALIGNED_COPY 
+            }
+            
+            {
+                SC_ALIGNED_TAIL_COPY    /*lint !e616 */
+            }
+            return EOK;
+        }
+#endif        
+    }
+    else
+    {
+        /* meet some runtime violation, return error code */
+        SECC_RET_MEMSET_ECODE
+    }
+}
+
+#if defined(WITH_PERFORMANCE_ADDONS) 
+
+errno_t memset_sOptAsm(void* dest, size_t destMax, int c, size_t count)
 {
     if (LIKELY(count <= destMax  && dest  && destMax <= SECUREC_MEM_MAX_LEN )) 
     {
@@ -226,8 +266,6 @@ errno_t memset_s(void* dest, size_t destMax, int c, size_t count)
         SECC_RET_MEMSET_ECODE
     }
 }
-
-#if defined(WITH_PERFORMANCE_ADDONS) 
 
 errno_t memset_sOptTc(void* dest, size_t destMax, int c, size_t count)
 {

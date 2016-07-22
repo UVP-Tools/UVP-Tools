@@ -554,11 +554,6 @@ NORMAL_STATE:
 #endif  /* _XXXUNICODE */
                 }
                 break;
-
-            case _T('Z'):
-                flags |= FLAG_SIZE; 
-                break;
-
             case _T('S'):   /* wide char string */
 #ifndef _XXXUNICODE
                 if (!(flags & (FLAG_SHORT | FLAG_LONG | FLAG_WIDECHAR)))
@@ -1077,7 +1072,12 @@ COMMON_INT:
                                 if ( ((flags & FLAG_I64) == 0) && ((flags & FLAG_LONGLONG) == 0) )
                                 {
 #ifdef SECUREC_ON_64BITS
+#if defined(COMPATIBLE_WIN_FORMAT) /*on window 64 system sizeof long is 32bit */
+                                    if (((flags & FLAG_PTRDIFF) == 0) && ((flags & FLAG_SIZE) == 0))
+#else
                                     if (((flags & FLAG_LONG) == 0) && ((flags & FLAG_PTRDIFF) == 0) && ((flags & FLAG_SIZE) == 0))
+#endif
+
 #endif
                                         number &= 0xffffffff;
                                 }

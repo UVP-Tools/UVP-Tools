@@ -4,7 +4,7 @@
 * Decription: 
 *             define macro, data struct, and declare function prototype,
 *             which is used by input.inl, secureinput_a.c and secureinput_w.c.
-Note£º
+Note:
 *             The macro SECUREC_LOCK_FIL, SECUREC_UNLOCK_FILE, SECUREC_LOCK_STDIN 
 *             and SECUREC_UNLOCK_STDIN are NOT implemented, which depends on your dest
 *             system. User can add implementation to these macro.

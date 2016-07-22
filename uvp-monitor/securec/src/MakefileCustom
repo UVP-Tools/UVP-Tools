@@ -9,15 +9,13 @@ TESTOBJS = $(ALL_OBJS) test.o
 
 CC = gcc
 
-FLAGS = -I ../include  -Wall -DNDEBUG -s -O2
-#FLAGS = -Wall -W -I ../include -I. -g -D_DEBUG
+FLAGS = -I ../include  -Wall -DNDEBUG -s -O2 -fno-strict-aliasing
 
 ARCH:=$(shell getconf LONG_BIT)
 
 ifeq ($(ARCH), 64)
     FLAGS += -fPIC
 endif
-
 
 securecshare: $(ALL_OBJS)
 	$(CC) $(FLAGS) -shared -o libsecurec.so $(ALL_OBJS)
