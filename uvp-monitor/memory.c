@@ -53,8 +53,11 @@ int GetMMUseRatio(const char *mem_file, char *meminfo_buf, int size, char *swap_
     FILE *file;
     char tmp_buffer[TMP_BUFFER_SIZE + 1];
     char *start = NULL;
+    char *start_swap = NULL;
+    int MemAvailable_flag = 0;
     unsigned long ulMemTotal = 0L;
     unsigned long ulMemFree = 0L;
+    unsigned long ulMemAvailable = 0L;    
     unsigned long ulMemBuffers = 0L;
     unsigned long ulMemCached = 0L;
     unsigned long ulMemSwapCached = 0L;
@@ -98,6 +101,17 @@ int GetMMUseRatio(const char *mem_file, char *meminfo_buf, int size, char *swap_
             /*lMemFree = atol(start);*/
             ulMemFree = strtoul(start, NULL, DECIMAL);
         }
+        /*get MemAvailable memory*/
+        start = strstr(tmp_buffer, "MemAvailable:");
+        if ( NULL != start )
+        {
+            start = start + strlen("MemAvailable:");
+            /*lMemFree = atol(start);*/
+            printf("start MemAvailable: %s \n", start );
+            ulMemAvailable = strtoul(start, NULL, DECIMAL);
+            MemAvailable_flag = 1;
+        }
+        
         /*get buffers memory*/
         start = strstr(tmp_buffer, "Buffers:");
         if ( NULL != start )
@@ -155,23 +169,35 @@ int GetMMUseRatio(const char *mem_file, char *meminfo_buf, int size, char *swap_
     }
 
     (void)fclose(file);
-    if(is_suse())
+    if(MemAvailable_flag)
     {
-        iRetLen = snprintf_s(meminfo_buf, size - 1, size - 1, "%lu:%lu:%lu:%lu:%lu", 
-                    ulMemFree + ulMemBuffers + ulMemCached + ulMemSwapCached + ulMemSReclaimable + ulMemNFSUnstable,
+        iRetLen = snprintf_s(meminfo_buf, size - 1, size - 1, "%lu:%lu:%lu:%lu:%lu",
+                    ulMemAvailable + ulMemBuffers + ulMemCached,
                     ulMemTotal,
-                    ulMemTotal - ulMemFree,
+                    ulMemTotal - ulMemAvailable,
                     ulMemBuffers,
                     ulMemCached);
     }
     else
     {
-        iRetLen = snprintf_s(meminfo_buf, size - 1, size - 1, "%lu:%lu:%lu:%lu:%lu",
-                    ulMemFree + ulMemBuffers + ulMemCached,
-                    ulMemTotal,
-                    ulMemTotal - ulMemFree,
-                    ulMemBuffers,
-                    ulMemCached);
+        if(is_suse())
+        {
+            iRetLen = snprintf_s(meminfo_buf, size - 1, size - 1, "%lu:%lu:%lu:%lu:%lu", 
+                        ulMemFree + ulMemBuffers + ulMemCached + ulMemSwapCached + ulMemSReclaimable + ulMemNFSUnstable,
+                        ulMemTotal,
+                        ulMemTotal - ulMemFree,
+                        ulMemBuffers,
+                        ulMemCached);
+        }
+        else
+        {
+            iRetLen = snprintf_s(meminfo_buf, size - 1, size - 1, "%lu:%lu:%lu:%lu:%lu",
+                        ulMemFree + ulMemBuffers + ulMemCached,
+                        ulMemTotal,
+                        ulMemTotal - ulMemFree,
+                        ulMemBuffers,
+                        ulMemCached);
+        }
     }
     meminfo_buf[iRetLen] = '\0';
 
