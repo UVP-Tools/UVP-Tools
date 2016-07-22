@@ -65,8 +65,8 @@
 #define MAX_FILENAMES_SIZE          52800
 /*xenstore键值最大长度为4096，减去键值长度，剩下长度为filesystem可放的长度*/
 #define MAX_FILENAMES_XENSTORLEN    4042
-/*最多只上报12个磁盘的利用率信息*/
-#define MAX_DISKUSAGE_STRING_NUM 11
+/*最多只上报60个磁盘的利用率信息*/
+#define MAX_DISKUSAGE_STRING_NUM    60
 /*FilenamesArr存放组装的文件系统名及使用率*/
 char FilenameArr[MAX_FILENAMES_SIZE] = {0};
 /* device-mapper对应的主设备号 */
@@ -793,7 +793,8 @@ static char* getXmlDevName(struct xs_handle *handle, const char *ptName)
         if (isCorrectDev(ptName, &entry))
         {
             xmlDevName = getScsiDiskXmlName(handle, entry.d_name);
-            break;
+            if (xmlDevName)
+                break;
         }
     }
 
@@ -885,8 +886,7 @@ int getPartitionsInfo(struct xs_handle *handle,
             xmlDevName = getXmlDevName(handle, szPtName);
             if (NULL == xmlDevName)
             {
-                (void)fclose(fpProcPt);
-                return ERROR;
+                continue;
             }
             (void)strncpy_s(tmpUsage->phyDevName, sizeof(tmpUsage->phyDevName), xmlDevName, sizeof(tmpUsage->phyDevName)-1);
             free(xmlDevName);
@@ -1206,6 +1206,10 @@ int getDiskInfo(struct DevMajorMinor *devMajorMinor, int partNum, struct DiskInf
     char szFsSize[MAX_STR_LEN] = {0};
     int i;
     struct DiskInfo *tmpDisk = NULL;
+    char *substr = NULL;
+    char tmp_mountPoint[MAX_STR_LEN] = {0};
+    int offset = 0;
+    int len = 0;
 
     /* 调用getMountInfo函数，获取挂载的文件系统信息及数量(在swap分区之后累加) */
     nResult = getMountInfo(diskMap, &nMountedFsNum);
@@ -1231,7 +1235,29 @@ int getDiskInfo(struct DevMajorMinor *devMajorMinor, int partNum, struct DiskInf
             /* 通过statfs函数，根据文件系统挂载点，获取文件系统的相关信息 */
             if (statfs(tmpDisk->mountPoint, &statfsInfo) != 0)
             {
-                return ERROR;
+                if (ENOENT != errno)
+                {
+                    return ERROR;
+                }
+                /* should retry, such as redhat-6.1 at GUI mode, USB DISK shown as /media/STEC\040DISK, need to replace \040 with ' '*/
+                substr = strstr(tmpDisk->mountPoint, "\\040");
+                if (!substr)
+                {
+                    return ERROR;
+                }
+
+                (void)memset_s(tmp_mountPoint, MAX_STR_LEN, 0 ,MAX_STR_LEN);
+                offset = substr - tmpDisk->mountPoint;
+                len = offset + strlen("\\040");
+
+                (void)memcpy_s(tmp_mountPoint, MAX_STR_LEN, tmpDisk->mountPoint, offset);
+                (void)memset_s(tmp_mountPoint + offset, MAX_STR_LEN - strlen("\\040"), '\040', 1);
+                (void)memcpy_s(tmp_mountPoint + offset + 1 , MAX_STR_LEN - offset - 1, tmpDisk->mountPoint + len, strlen(tmpDisk->mountPoint) - len);
+
+                if (statfs(tmp_mountPoint, &statfsInfo) != 0)
+                {
+                    return ERROR;
+                }
             }
             /* 如果总块数大于0，并且mount信息非空，则挂载点信息文件指针正常，执行以下操作 */
             if (statfsInfo.f_blocks > 0)
@@ -1400,23 +1426,9 @@ int getDmParentNode(struct DevMajorMinor *devMajorMinor, int partNum, int devID,
     {
         return ERROR;
     }
-    #if 0
-    if (UNKNOWN == nFlag)
-    {
-        return UNKNOWN;
-    }
-	#endif
-    /* 将获取出来的父设备名传递给出参 */
-    (void)strncpy_s(parentName, strlen(szRealName)+1, szRealName, strlen(szRealName));
-
-#if 0
-    /* 将获取出来的父设备主次设备号逆向转换为一个整数，通过getInfoFromID函数，获取父设备名 */
-    nParentDevID = makedev(nParentMajor, nParentMinor);
-    (void)getInfoFromID(devMajorMinor, partNum, nParentDevID, szRealName, NULL);
 
     /* 将获取出来的父设备名传递给出参 */
     (void)strncpy_s(parentName, strlen(szRealName)+1, szRealName, strlen(szRealName));
-#endif
 
     return SUCC;
 }
@@ -1512,12 +1524,6 @@ int getAllDeviceUsage(struct DevMajorMinor *devMajorMinor, struct DeviceInfo *li
             {
                 return ERROR;
             }
-            #if 0
-            if (UNKNOWN == nResult)
-            {
-                return UNKNOWN;
-            }
-            #endif
         }
         else
         {
@@ -1675,13 +1681,7 @@ int getDiskUsage(struct xs_handle *handle, char *pszDiskUsage)
         freeSpace(devMajorMinor, linuxDiskUsage, diskMap);
         return ERROR;
     }
-    #if 0
-    if (UNKNOWN == nResult)
-    {
-        freeSpace(devMajorMinor, linuxDiskUsage, diskMap);
-        return UNKNOWN;
-    }
-	#endif
+
     /* 循环读取结构体数据的每个成员 */
     for (i = 0; i < numberCount.diskNum; i++)
     {
@@ -1824,23 +1824,6 @@ int diskworkctlmon(struct xs_handle *handle)
         }
         return ERROR;
     }
-    #if 0
-    else if (UNKNOWN == nRet)
-    {
-        /*如果动态磁盘跨多块磁盘
-                 (我们仅支持动态磁盘不跨多块磁盘的情况),
-                 那么写入"unknown"*/
-        if(xb_write_first_flag == 0)
-        {
-            write_to_xenstore(handle, DISK_DATA_PATH, "unknown");
-        }
-        else
-        {
-            write_weak_to_xenstore(handle, DISK_DATA_PATH, "unknown");
-        }
-        return UNKNOWN;
-    }
-    #endif
     else
     {
         if(xb_write_first_flag == 0)
