@@ -172,7 +172,7 @@ int GetMMUseRatio(const char *mem_file, char *meminfo_buf, int size, char *swap_
     if(MemAvailable_flag)
     {
         iRetLen = snprintf_s(meminfo_buf, size - 1, size - 1, "%lu:%lu:%lu:%lu:%lu",
-                    ulMemAvailable + ulMemBuffers + ulMemCached,
+                    ulMemAvailable,
                     ulMemTotal,
                     ulMemTotal - ulMemAvailable,
                     ulMemBuffers,
