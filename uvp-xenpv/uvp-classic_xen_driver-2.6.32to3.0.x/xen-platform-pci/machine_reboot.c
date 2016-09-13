@@ -5,8 +5,6 @@
 #include <xen/xenbus.h>
 #include "platform-pci.h"
 #include <asm/hypervisor.h>
-#include <linux/kmod.h>
-
 
 struct ap_suspend_info {
 	int      do_spin;
@@ -68,34 +66,12 @@ static int bp_suspend(void)
 unsigned int migrate_state = 0;
 EXPORT_SYMBOL(migrate_state);
 
-static void off_uvp_monitor(void)
-{
-    static char *envp[] = { "HOME=/", "TERM=linux",
-       "PATH=/sbin:/usr/sbin:/bin:/usr/bin", NULL };
-    static char *off_argv[] = { "/sbin/service", "uvp-monitor", "stop", NULL };
-
-    if (call_usermodehelper("/sbin/service", off_argv, envp, UMH_WAIT_PROC) >= 0)
-        printk("%s %d: the uvp-monitor has been stop.\n", __FUNCTION__, __LINE__);
-}
-
-static void on_uvp_monitor(void)
-{
-    static char *envp[] = { "HOME=/", "TERM=linux",
-        "PATH=/sbin:/usr/sbin:/bin:/usr/bin", NULL };
-    static char *on_argv[] = { "/sbin/service", "uvp-monitor", "start", NULL };
-
-    if (call_usermodehelper("/sbin/service", on_argv, envp, UMH_WAIT_PROC) >= 0)
-        printk("%s %d: the uvp-monitor has been start.\n", __FUNCTION__, __LINE__);
-}
-
 int __xen_suspend(int fast_suspend, void (*resume_notifier)(int))
 {
 	int err, suspend_cancelled, nr_cpus;
 	struct ap_suspend_info info;
 	
 	migrate_state = 1;
-	off_uvp_monitor();
-	write_monitor_service_flag();
 
 	xenbus_suspend();
 
@@ -142,15 +118,14 @@ int __xen_suspend(int fast_suspend, void (*resume_notifier)(int))
 		xenbus_suspend_cancel();
 
 	/* update uvp flags */
+	write_driver_resume_flag(); 
+	write_feature_flag();
 	write_monitor_service_flag();
 	migrate_state = 0;
 
 #if defined(VRM)
 	xenbus_write(XBT_NIL, "control/uvp", "vrm_flag", "true");
 #endif
-      on_uvp_monitor();
-      write_driver_resume_flag(); 
-      write_feature_flag();
 
 	return 0;
 }

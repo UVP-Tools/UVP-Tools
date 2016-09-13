@@ -41,9 +41,9 @@ static int get_id_from_freelist(struct vscsifrnt_info *info)
 	spin_lock_irqsave(&info->shadow_lock, flags);
 
 	free = info->shadow_free;
-	BUG_ON(free > VSCSIIF_MAX_REQS);
+	BUG_ON(free >= VSCSIIF_MAX_REQS);
 	info->shadow_free = info->shadow[free].next_free;
-	info->shadow[free].next_free = 0x0fff;
+	info->shadow[free].next_free = VSCSIIF_IN_USE;
 
 	info->shadow[free].wait_reset = 0;
 
@@ -68,6 +68,41 @@ static void add_id_to_freelist(struct vscsifrnt_info *info, uint32_t id)
 	spin_unlock_irqrestore(&info->shadow_lock, flags);
 }
 
+static struct grant *get_grant(grant_ref_t *gref_head,
+			           unsigned long pfn,
+			           struct vscsifrnt_info *info,
+			           int write)
+{
+	struct grant *gnt_list_entry;
+	unsigned long buffer_mfn;
+
+	BUG_ON(list_empty(&info->grants));
+	gnt_list_entry = list_first_entry(&info->grants, struct grant,
+									  node);
+	list_del(&gnt_list_entry->node);
+
+	/* for persistent grant */
+	if (gnt_list_entry->gref != GRANT_INVALID_REF) {
+		info->persistent_gnts_c--;
+		return gnt_list_entry;
+	}
+
+	/* Assign a gref to this page */
+	gnt_list_entry->gref = gnttab_claim_grant_reference(gref_head);
+	BUG_ON(gnt_list_entry->gref == -ENOSPC);
+
+	if (!info->feature_persistent) {
+		BUG_ON(!pfn);
+		gnt_list_entry->pfn = pfn;
+	}
+
+	buffer_mfn = pfn_to_mfn(gnt_list_entry->pfn);
+	gnttab_grant_foreign_access_ref(gnt_list_entry->gref,
+									info->dev->otherend_id,
+									buffer_mfn, 
+									write);
+	return gnt_list_entry;
+}
 
 struct vscsiif_request * scsifront_pre_request(struct vscsifrnt_info *info)
 {
@@ -110,82 +145,114 @@ irqreturn_t scsifront_intr(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static bool push_cmd_to_ring(struct vscsifrnt_info *info,
-			     vscsiif_request_t *ring_req)
-{
-	unsigned int left, rqid = info->active.rqid;
-	struct scsi_cmnd *sc;
-
-	for (; ; ring_req = NULL) {
-		struct vscsiif_sg_list *sgl;
-
-		if (!ring_req) {
-			struct vscsiif_front_ring *ring = &info->ring;
-
-			ring_req = RING_GET_REQUEST(ring, ring->req_prod_pvt);
-			ring->req_prod_pvt++;
-			ring_req->rqid = rqid;
-		}
-
-		left = info->shadow[rqid].nr_segments - info->active.done;
-		if (left <= VSCSIIF_SG_TABLESIZE)
-			break;
-
-		sgl = (void *)ring_req;
-		sgl->act = VSCSIIF_ACT_SCSI_SG_PRESET;
-
-		if (left > VSCSIIF_SG_LIST_SIZE)
-			left = VSCSIIF_SG_LIST_SIZE;
-		memcpy(sgl->seg, info->active.segs + info->active.done,
-		       left * sizeof(*sgl->seg));
-
-		sgl->nr_segments = left;
-		info->active.done += left;
-
-		if (RING_FULL(&info->ring))
-			return false;
-	}
-
-	sc = info->active.sc;
-
-	ring_req->act     = VSCSIIF_ACT_SCSI_CDB;
-	ring_req->id      = sc->device->id;
-	ring_req->lun     = sc->device->lun;
-	ring_req->channel = sc->device->channel;
-	ring_req->cmd_len = sc->cmd_len;
-
-	if ( sc->cmd_len )
-		memcpy(ring_req->cmnd, sc->cmnd, sc->cmd_len);
-	else
-		memset(ring_req->cmnd, 0, VSCSIIF_MAX_COMMAND_SIZE);
-
-	ring_req->sc_data_direction   = sc->sc_data_direction;
-	ring_req->timeout_per_command = sc->request->timeout / HZ;
-	ring_req->nr_segments         = left;
-
-	memcpy(ring_req->seg, info->active.segs + info->active.done,
-               left * sizeof(*ring_req->seg));
-
-	info->active.sc = NULL;
-
-	return !RING_FULL(&info->ring);
-}
-
 static void scsifront_gnttab_done(struct vscsifrnt_info *info, uint32_t id)
 {
 	struct vscsifrnt_shadow *s = &info->shadow[id];
-	int i;
+	struct scsi_cmnd *sc = s->sc;
+	int i = 0;
+	int nseg = s->nr_segments;
+	int read = (s->sc->sc_data_direction == DMA_FROM_DEVICE);
+	unsigned int off, len, bytes;
+	unsigned int data_len = scsi_bufflen(sc);
+	char *sg_data = NULL;
+	void *shared_data = NULL;
 
 	if (s->sc->sc_data_direction == DMA_NONE)
 		return;
 
-	for (i = 0; i < s->nr_segments; i++) {
-		if (unlikely(gnttab_query_foreign_access(s->gref[i]) != 0)) {
-			shost_printk(PREFIX(ALERT), info->host,
-				     "grant still in use by backend\n");
-			BUG();
+	if (read && info->feature_persistent) {
+		/*
+		 * Copy the data received from the backend into the bvec.
+		 * Since bv_offset can be different than 0, and bv_len different
+		 * than PAGE_SIZE, we have to keep track of the current offset,
+		 * to be sure we are copying the data from the right shared page.
+		 */
+		struct scatterlist *sg, *sgl = scsi_sglist(sc);
+
+		for_each_sg (sgl, sg, scsi_sg_count(sc), i) {
+			off = sg->offset;
+			len = sg->length;
+
+			while (len > 0 && data_len > 0) {
+				/*
+				 * sg sends a scatterlist that is larger than
+				 * the data_len it wants transferred for certain
+				 * IO sizes
+				 */
+				bytes = min_t(unsigned int, len, PAGE_SIZE - off);
+				bytes = min(bytes, data_len);
+
+				BUG_ON(sg->offset + sg->length > PAGE_SIZE);
+				shared_data = kmap_atomic(pfn_to_page(s->grants_used[i]->pfn));
+				sg_data = kmap_atomic(sg_page(sg));
+
+				memcpy(sg_data     + sg->offset,
+				       shared_data + sg->offset,
+				       sg->length);
+
+				kunmap_atomic(sg_data);
+				kunmap_atomic(shared_data);
+				len -= bytes;
+				data_len -= bytes;
+				off = 0;
+			}
 		}
-		gnttab_end_foreign_access(s->gref[i], 0UL);
+	}
+
+	/* Add the persistent grant into the list of free grants */
+	for (i = 0; i < nseg; i++) {
+		if (gnttab_query_foreign_access(s->grants_used[i]->gref)) {
+			/*
+			 * If the grant is still mapped by the backend (the
+			 * backend has chosen to make this grant persistent)
+			 * we add it at the head of the list, so it will be
+			 * reused first.
+			 */
+			if (!info->feature_persistent) {
+				printk(KERN_WARNING "backed has not unmapped grant: %u\n",
+						     s->grants_used[i]->gref);
+				shost_printk(PREFIX(ALERT), info->host,
+				     "grant still in use by backend\n");
+				BUG();
+			}
+			list_add(&s->grants_used[i]->node, &info->grants);
+			info->persistent_gnts_c++;
+		} else {
+			/*
+			 * If the grant is not mapped by the backend we end the
+			 * foreign access and add it to the tail of the list,
+			 * so it will not be picked again unless we run out of
+			 * persistent grants.
+			 */
+			gnttab_end_foreign_access(s->grants_used[i]->gref, 0UL);
+			s->grants_used[i]->gref = GRANT_INVALID_REF;
+			list_add_tail(&s->grants_used[i]->node, &info->grants);
+		}
+	}
+	if (s->sc_data_direction == DMA_VSCSI_INDIRECT) {
+		for (i = 0; i < VSCSI_INDIRECT_PAGES(nseg); i++) {
+			if (gnttab_query_foreign_access(s->indirect_grants[i]->gref)) {
+				if (!info->feature_persistent)
+					printk(KERN_WARNING "backed has not unmapped grant: %u\n",
+							s->indirect_grants[i]->gref);
+				list_add(&s->indirect_grants[i]->node, &info->grants);
+				info->persistent_gnts_c++;
+			} else {
+				struct page *indirect_page;
+
+				gnttab_end_foreign_access(s->indirect_grants[i]->gref, 0UL);	
+				/*
+				 * Add the used indirect page back to the list of
+				 * available pages for indirect grefs.
+				 */
+				if (!info->feature_persistent) {
+					indirect_page = pfn_to_page(s->indirect_grants[i]->pfn);
+					list_add(&indirect_page->lru, &info->indirect_pages);
+				}
+				s->indirect_grants[i]->gref = GRANT_INVALID_REF;
+				list_add_tail(&s->indirect_grants[i]->node, &info->grants);
+			}
+		}
 	}
 }
 
@@ -249,37 +316,26 @@ static void scsifront_sync_cmd_done(struct vscsifrnt_info *info,
 	wake_up(&(info->shadow[id].wq_reset));
 }
 
+static void scsifront_do_response(struct vscsifrnt_info *info,
+				  vscsiif_response_t *ring_res)
+{
+	if (info->shadow[ring_res->rqid].act == VSCSIIF_ACT_SCSI_CDB)
+		scsifront_cdb_cmd_done(info, ring_res);
+	else
+		scsifront_sync_cmd_done(info, ring_res);
+}
 
-static int scsifront_cmd_done(struct vscsifrnt_info *info)
+static int scsifront_ring_drain(struct vscsifrnt_info *info)
 {
 	vscsiif_response_t *ring_res;
-
 	RING_IDX i, rp;
 	int more_to_do = 0;
-	unsigned long flags;
-
-	spin_lock_irqsave(info->host->host_lock, flags);
 
 	rp = info->ring.sring->rsp_prod;
 	rmb();
 	for (i = info->ring.rsp_cons; i != rp; i++) {
-		
 		ring_res = RING_GET_RESPONSE(&info->ring, i);
-
-		if (info->host->sg_tablesize > VSCSIIF_SG_TABLESIZE) {
-			u8 act = ring_res->act;
-
-			if (act == VSCSIIF_ACT_SCSI_SG_PRESET)
-				continue;
-			if (act != info->shadow[ring_res->rqid].act)
-				DPRINTK("Bogus backend response (%02x vs %02x)\n",
-					act, info->shadow[ring_res->rqid].act);
-		}
-
-		if (info->shadow[ring_res->rqid].act == VSCSIIF_ACT_SCSI_CDB)
-			scsifront_cdb_cmd_done(info, ring_res);
-		else
-			scsifront_sync_cmd_done(info, ring_res);
+		scsifront_do_response(info, ring_res);
 	}
 
 	info->ring.rsp_cons = i;
@@ -290,10 +346,17 @@ static int scsifront_cmd_done(struct vscsifrnt_info *info)
 		info->ring.sring->rsp_event = i + 1;
 	}
 
-	if (info->active.sc && !RING_FULL(&info->ring)) {
-		push_cmd_to_ring(info, NULL);
-		scsifront_do_request(info);
-	}
+	return more_to_do;
+}
+
+static int scsifront_cmd_done(struct vscsifrnt_info *info)
+{
+	int more_to_do;
+	unsigned long flags;
+
+	spin_lock_irqsave(info->host->host_lock, flags);
+
+	more_to_do = scsifront_ring_drain(info);
 
 	info->waiting_sync = 0;
 
@@ -307,8 +370,23 @@ static int scsifront_cmd_done(struct vscsifrnt_info *info)
 	return more_to_do;
 }
 
+void scsifront_finish_all(struct vscsifrnt_info *info)
+{
+	unsigned i;
+	struct vscsiif_response resp;
 
+	scsifront_ring_drain(info);
 
+	for (i = 0; i < VSCSIIF_MAX_REQS; i++) {
+		if (info->shadow[i].next_free != VSCSIIF_IN_USE)
+			continue;
+		resp.rqid = i;
+		resp.sense_len = 0;
+		resp.rslt = DID_RESET << 16;
+		resp.residual_len = 0;
+		scsifront_do_response(info, &resp);
+	}
+}
 
 int scsifront_schedule(void *data)
 {
@@ -317,8 +395,7 @@ int scsifront_schedule(void *data)
 	while (!kthread_should_stop()) {
 		wait_event_interruptible(
 			info->wq,
-			(kgr_task_safe(current),
-			 info->waiting_resp || kthread_should_stop()));
+			info->waiting_resp || kthread_should_stop());
 
 		info->waiting_resp = 0;
 		smp_mb();
@@ -332,9 +409,39 @@ int scsifront_schedule(void *data)
 
 
 
+static int scsifront_calculate_segs(struct scsi_cmnd *sc)
+{
+	unsigned int i, off, len, bytes;
+	int ref_cnt = 0;
+	unsigned int data_len = scsi_bufflen(sc);
+	struct scatterlist *sg, *sgl = scsi_sglist(sc);
+
+	for_each_sg (sgl, sg, scsi_sg_count(sc), i) {
+		off = sg->offset;
+		len = sg->length;
+
+		while (len > 0 && data_len > 0) {
+			/*
+			 * sg sends a scatterlist that is larger than
+			 * the data_len it wants transferred for certain
+			 * IO sizes
+			 */
+			bytes = min_t(unsigned int, len, PAGE_SIZE - off);
+			bytes = min(bytes, data_len);
+			
+			len -= bytes;
+			data_len -= bytes;
+			off = 0;
+			ref_cnt++;
+		}
+	}
+
+	return ref_cnt;
+}
+
 static int map_data_for_request(struct vscsifrnt_info *info,
-				struct scsi_cmnd *sc,
-				struct vscsifrnt_shadow *shadow)
+		struct scsi_cmnd *sc, vscsiif_request_t *ring_req,
+		uint32_t id)
 {
 	grant_ref_t gref_head;
 	struct page *page;
@@ -342,20 +449,50 @@ static int map_data_for_request(struct vscsifrnt_info *info,
 	int write = (sc->sc_data_direction == DMA_TO_DEVICE);
 	unsigned int i, nr_pages, off, len, bytes;
 	unsigned int data_len = scsi_bufflen(sc);
+	int nseg, max_grefs, n;
+	struct grant *gnt_list_entry = NULL;
+	struct scsiif_request_segment_aligned *segments = NULL;
+	bool new_persistent_gnts;
 
-	if (sc->sc_data_direction == DMA_NONE || !data_len)
+	if (sc->sc_data_direction == DMA_NONE || !data_len) {
+		ring_req->u.rw.nr_segments = (uint8_t)ref_cnt;
 		return 0;
-
-	err = gnttab_alloc_grant_references(info->host->sg_tablesize, &gref_head);
-	if (err) {
-		shost_printk(PREFIX(ERR), info->host,
-			     "gnttab_alloc_grant_references() error\n");
-		return -ENOMEM;
 	}
 
+	max_grefs = info->max_indirect_segments ?
+		info->max_indirect_segments +
+		VSCSI_INDIRECT_PAGES(info->max_indirect_segments) :
+		VSCSIIF_SG_TABLESIZE;
+
+	/* Check if we have enought grants to allocate a requests */
+	if (info->persistent_gnts_c < max_grefs) {
+		new_persistent_gnts = 1;
+		err = gnttab_alloc_grant_references(
+				max_grefs - info->persistent_gnts_c, 
+				&gref_head);
+		if (err) {
+			shost_printk(PREFIX(ERR), info->host,
+				     "gnttab_alloc_grant_references() error\n");
+			return -ENOMEM;
+		}
+	} else
+		new_persistent_gnts = 0;
+
+	nseg = scsifront_calculate_segs(sc);
+
+	if (nseg > VSCSIIF_SG_TABLESIZE) {
+		ring_req->sc_data_direction = DMA_VSCSI_INDIRECT;
+		ring_req->u.indirect.indirect_op = (uint8_t)sc->sc_data_direction;
+		ring_req->u.indirect.nr_segments = (uint16_t)nseg;
+		info->shadow[id].sc_data_direction = DMA_VSCSI_INDIRECT;
+	} else {
+		ring_req->sc_data_direction = (uint8_t)sc->sc_data_direction;
+		ring_req->u.rw.nr_segments = (uint8_t)nseg;
+		info->shadow[id].sc_data_direction = (uint8_t)sc->sc_data_direction;
+	}
 	/* quoted scsi_lib.c/scsi_req_map_sg . */
 	nr_pages = PFN_UP(data_len + scsi_sglist(sc)->offset);
-	if (nr_pages > info->host->sg_tablesize) {
+	if (nr_pages > max_grefs) {
 		shost_printk(PREFIX(ERR), info->host,
 			     "Unable to map request_buffer for command!\n");
 		ref_cnt = -E2BIG;
@@ -368,6 +505,30 @@ static int map_data_for_request(struct vscsifrnt_info *info,
 			len = sg->length;
 
 			while (len > 0 && data_len > 0) {
+				/* map indirect page */
+				if ((ring_req->sc_data_direction == DMA_VSCSI_INDIRECT) &&
+					(ref_cnt % SEGS_PER_VSCSI_INDIRECT_FRAME == 0)) {
+					unsigned long uninitialized_var(pfn);
+
+					if (segments)
+						kunmap_atomic(segments);
+
+					n = ref_cnt / SEGS_PER_VSCSI_INDIRECT_FRAME;
+					if (!info->feature_persistent) {
+						struct page *indirect_page;
+						/* Fetch a pre-allocated page to use for indirect grefs */
+						BUG_ON(list_empty(&info->indirect_pages));
+						indirect_page = list_first_entry(&info->indirect_pages,
+														 struct page, lru);
+						list_del(&indirect_page->lru);
+						pfn = page_to_pfn(indirect_page);
+					}
+
+					gnt_list_entry = get_grant(&gref_head, pfn, info, 0);
+					info->shadow[id].indirect_grants[n] = gnt_list_entry;
+					segments = kmap_atomic(pfn_to_page(gnt_list_entry->pfn));
+					ring_req->u.indirect.indirect_grefs[n] = gnt_list_entry->gref;
+				}
 				/*
 				 * sg sends a scatterlist that is larger than
 				 * the data_len it wants transferred for certain
@@ -375,18 +536,53 @@ static int map_data_for_request(struct vscsifrnt_info *info,
 				 */
 				bytes = min_t(unsigned int, len, PAGE_SIZE - off);
 				bytes = min(bytes, data_len);
-				
-				ref = gnttab_claim_grant_reference(&gref_head);
-				BUG_ON(ref == -ENOSPC);
 
-				gnttab_grant_foreign_access_ref(ref, info->dev->otherend_id,
-					page_to_phys(page) >> PAGE_SHIFT, write);
+				gnt_list_entry = get_grant(&gref_head, page_to_pfn(sg_page(sg)), info, write);
+				ref = gnt_list_entry->gref;
 
-				shadow->gref[ref_cnt] = ref;
-				info->active.segs[ref_cnt].gref   = ref;
-				info->active.segs[ref_cnt].offset = off;
-				info->active.segs[ref_cnt].length = bytes;
+				info->shadow[id].grants_used[ref_cnt] = gnt_list_entry;
 
+				/* If use persistent grant, it will have a memcpy,
+				 * just copy the data from sg page to grant page. 
+				 */
+				if (write && info->feature_persistent) {
+					char *sg_data = NULL;
+					void *shared_data = NULL;
+
+					BUG_ON(sg->offset + sg->length > PAGE_SIZE);
+
+					shared_data = kmap_atomic(pfn_to_page(gnt_list_entry->pfn));
+					sg_data = kmap_atomic(sg_page(sg));
+
+					/*
+					 * this does not wipe data stored outside the
+					 * range sg->offset..sg->offset+sg->length.
+					 * Therefore, blkback *could* see data from
+					 * previous requests. This is OK as long as
+					 * persistent grants are shared with just one
+					 * domain. It may need refactoring if this
+					 * changes
+					 */
+					memcpy(shared_data + sg->offset,
+						   sg_data     + sg->offset,
+						   sg->length);
+
+					kunmap_atomic(sg_data);
+					kunmap_atomic(shared_data);
+				}
+
+				if (ring_req->sc_data_direction != DMA_VSCSI_INDIRECT) {
+					ring_req->u.rw.seg[ref_cnt].gref     = ref;
+					ring_req->u.rw.seg[ref_cnt].offset   = (uint16_t)off;
+					ring_req->u.rw.seg[ref_cnt].length   = (uint16_t)bytes;
+				} else {
+					n = ref_cnt % SEGS_PER_VSCSI_INDIRECT_FRAME;
+					segments[n] = 
+						(struct scsiif_request_segment_aligned) {
+							.gref     = ref,
+							.offset   = (uint16_t)off,
+							.length   = (uint16_t)bytes };
+				}
 				page++;
 				len -= bytes;
 				data_len -= bytes;
@@ -396,9 +592,35 @@ static int map_data_for_request(struct vscsifrnt_info *info,
 		}
 	}
 
-	gnttab_free_grant_references(gref_head);
+	if (segments)
+		kunmap_atomic(segments);
+
+	/* for persistent grant */
+	if (new_persistent_gnts)
+		gnttab_free_grant_references(gref_head);
 
 	return ref_cnt;
+}
+
+static int scsifront_enter(struct vscsifrnt_info *info)
+{
+	if (info->pause)
+		return 1;
+	info->callers++;
+	return 0;
+}
+
+static void scsifront_return(struct vscsifrnt_info *info)
+{
+	info->callers--;
+	if (info->callers)
+		return;
+
+	if (!info->waiting_pause)
+		return;
+
+	info->waiting_pause = 0;
+	wake_up(&info->wq_pause);
 }
 
 static int scsifront_queuecommand(struct Scsi_Host *shost,
@@ -410,6 +632,9 @@ static int scsifront_queuecommand(struct Scsi_Host *shost,
 	int ref_cnt;
 	uint16_t rqid;
 
+	if (scsifront_enter(info))
+		return SCSI_MLQUEUE_HOST_BUSY;
+
 /* debug printk to identify more missing scsi commands
 	shost_printk(KERN_INFO "scsicmd: ", sc->device->host,
 		     "len=%u %#x,%#x,%#x,%#x,%#x,%#x,%#x,%#x,%#x,%#x\n",
@@ -420,12 +645,7 @@ static int scsifront_queuecommand(struct Scsi_Host *shost,
 	spin_lock_irqsave(shost->host_lock, flags);
 	scsi_cmd_get_serial(shost, sc);
 	if (RING_FULL(&info->ring)) {
-		spin_unlock_irqrestore(shost->host_lock, flags);
-		return SCSI_MLQUEUE_HOST_BUSY;
-	}
-
-	if (info->active.sc && !push_cmd_to_ring(info, NULL)) {
-		scsifront_do_request(info);
+		scsifront_return(info);
 		spin_unlock_irqrestore(shost->host_lock, flags);
 		return SCSI_MLQUEUE_HOST_BUSY;
 	}
@@ -434,16 +654,33 @@ static int scsifront_queuecommand(struct Scsi_Host *shost,
 
 	ring_req          = scsifront_pre_request(info);
 	rqid              = ring_req->rqid;
+	ring_req->act     = VSCSIIF_ACT_SCSI_CDB;
+
+	ring_req->id      = sc->device->id;
+	ring_req->lun     = sc->device->lun;
+	ring_req->channel = sc->device->channel;
+	ring_req->cmd_len = sc->cmd_len;
 
 	BUG_ON(sc->cmd_len > VSCSIIF_MAX_COMMAND_SIZE);
 
+	if ( sc->cmd_len )
+		memcpy(ring_req->cmnd, sc->cmnd, sc->cmd_len);
+	else
+		memset(ring_req->cmnd, 0, VSCSIIF_MAX_COMMAND_SIZE);
+
+	ring_req->sc_data_direction   = (uint8_t)sc->sc_data_direction;
+	ring_req->timeout_per_command = (sc->request->timeout / HZ);
+
 	info->shadow[rqid].sc  = sc;
 	info->shadow[rqid].act = VSCSIIF_ACT_SCSI_CDB;
+	info->shadow[rqid].sc_data_direction = (uint8_t)sc->sc_data_direction;
 
-	ref_cnt = map_data_for_request(info, sc, &info->shadow[rqid]);
+	ref_cnt = map_data_for_request(info, sc, ring_req, rqid);
 	if (ref_cnt < 0) {
 		add_id_to_freelist(info, rqid);
+		info->ring.req_prod_pvt--;
 		scsifront_do_request(info);
+		scsifront_return(info);
 		spin_unlock_irqrestore(shost->host_lock, flags);
 		if (ref_cnt == (-ENOMEM))
 			return SCSI_MLQUEUE_HOST_BUSY;
@@ -454,14 +691,10 @@ static int scsifront_queuecommand(struct Scsi_Host *shost,
 
 	info->shadow[rqid].nr_segments = ref_cnt;
 
-	info->active.sc  = sc;
-	info->active.rqid = rqid;
-	info->active.done = 0;
-	push_cmd_to_ring(info, ring_req);
-
 	scsifront_do_request(info);
-	spin_unlock_irqrestore(shost->host_lock, flags);
 
+	scsifront_return(info);
+	spin_unlock_irqrestore(shost->host_lock, flags);
 	return 0;
 }
 
@@ -481,13 +714,11 @@ static int scsifront_dev_reset_handler(struct scsi_cmnd *sc)
 	uint16_t rqid;
 	int err = 0;
 
-	for (;;) {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,12)
-		spin_lock_irq(host->host_lock);
+	spin_lock_irq(host->host_lock);
 #endif
-		if (!RING_FULL(&info->ring))
-			break;
-		if (err) {
+	while (RING_FULL(&info->ring)) {
+		if (err || info->pause) {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,12)
 			spin_unlock_irq(host->host_lock);
 #endif
@@ -498,6 +729,11 @@ static int scsifront_dev_reset_handler(struct scsi_cmnd *sc)
 		err = wait_event_interruptible(info->wq_sync,
 					       !info->waiting_sync);
 		spin_lock_irq(host->host_lock);
+	}
+
+	if (scsifront_enter(info)) {
+		spin_unlock_irq(host->host_lock);
+		return FAILED;
 	}
 
 	ring_req      = scsifront_pre_request(info);
@@ -519,7 +755,7 @@ static int scsifront_dev_reset_handler(struct scsi_cmnd *sc)
 
 	ring_req->sc_data_direction   = (uint8_t)sc->sc_data_direction;
 	ring_req->timeout_per_command = (sc->request->timeout / HZ);
-	ring_req->nr_segments         = 0;
+	ring_req->u.rw.nr_segments    = 0;
 
 	scsifront_do_request(info);	
 
@@ -537,6 +773,8 @@ static int scsifront_dev_reset_handler(struct scsi_cmnd *sc)
 		spin_unlock(&info->shadow_lock);
 		err = FAILED;
 	}
+
+	scsifront_return(info);
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,12)
 	spin_unlock_irq(host->host_lock);

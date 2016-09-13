@@ -639,18 +639,7 @@ int blkif_release(struct gendisk *disk, fmode_t mode)
 	struct blkfront_info *info = disk->private_data;
 
 	info->users--;
-#if 0
-	if (info->users == 0) {
-		/* Check whether we have been instructed to close.  We will
-		   have ignored this request initially, as the device was
-		   still mounted. */
-		struct xenbus_device * dev = info->xbdev;
-		enum xenbus_state state = xenbus_read_driver_state(dev->otherend);
 
-		if (state == XenbusStateClosing && info->is_ready)
-			blkfront_closing(dev);
-	}
-#endif
 	return 0;
 }
 
@@ -665,6 +654,7 @@ int blkif_ioctl(struct block_device *bd, fmode_t mode,
 		unsigned command, unsigned long argument)
 {
 #endif
+	struct blkfront_info *info = bd->bd_disk->private_data;
 	int i;
 
 	DPRINTK_IOCTL("command: 0x%x, argument: 0x%lx, dev: 0x%04x\n",
@@ -698,13 +688,11 @@ int blkif_ioctl(struct block_device *bd, fmode_t mode,
 				return -EFAULT;
 		return 0;
 
-	case CDROM_GET_CAPABILITY: {
-		struct blkfront_info *info = bd->bd_disk->private_data;
-		struct gendisk *gd = info->gd;
-		if (gd->flags & GENHD_FL_CD)
+	case CDROM_GET_CAPABILITY:
+		if (info->gd && (info->gd->flags & GENHD_FL_CD))
 			return 0;
 		return -EINVAL;
-	}
+
 	default:
 		/*printk(KERN_ALERT "ioctl %08x not supported by Xen blkdev\n",
 		  command);*/

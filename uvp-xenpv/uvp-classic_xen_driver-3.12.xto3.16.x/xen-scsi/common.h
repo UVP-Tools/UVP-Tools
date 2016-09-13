@@ -51,7 +51,7 @@
 #include <xen/evtchn.h>
 #include <xen/interface/xen.h>
 #include <xen/interface/io/ring.h>
-#include <xen/interface/io/vscsiif.h>
+#include "../include/xen/interface/io/vscsiif.h"
 #include <xen/interface/grant_table.h>
 #include <xen/interface/io/protocols.h>
 #include <asm/delay.h>
@@ -62,26 +62,44 @@
 #include <xen/platform-compat.h>
 #endif
 
-#define VSCSI_IN_ABORT		1
-#define VSCSI_IN_RESET		2
+#define VSCSI_IN_ABORT              1
+#define VSCSI_IN_RESET              2
+
+#define DMA_VSCSI_INDIRECT          4
 
 /* tuning point*/
-#define VSCSIIF_DEFAULT_CMD_PER_LUN 10
+#define VSCSIIF_DEFAULT_CMD_PER_LUN 128
 #define VSCSIIF_MAX_TARGET          64
 #define VSCSIIF_MAX_LUN             255
 
-#define VSCSIIF_RING_SIZE	__CONST_RING_SIZE(vscsiif, PAGE_SIZE)
-#define VSCSIIF_MAX_REQS	VSCSIIF_RING_SIZE
+#define VSCSIIF_MAX_RING_ORDER      3U
+#define VSCSIIF_MAX_RING_PAGES      (1U << VSCSIIF_MAX_RING_ORDER)
+#define VSCSIIF_MAX_RING_PAGE_SIZE  (VSCSIIF_MAX_RING_PAGES * PAGE_SIZE)
+#define VSCSIIF_MAX_RING_SIZE       __CONST_RING_SIZE(vscsiif, VSCSIIF_MAX_RING_PAGE_SIZE)
+#define VSCSIIF_MAX_REQS            VSCSIIF_MAX_RING_SIZE
+
+#define VSCSIIF_STATE_DISCONNECT    0
+#define VSCSIIF_STATE_CONNECTED    	1
+#define VSCSIIF_STATE_SUSPENDED    	2
+
+struct grant {
+    grant_ref_t gref;
+    unsigned long pfn;
+    struct list_head node;
+};
 
 struct vscsifrnt_shadow {
 	uint16_t next_free;
-	
+#define VSCSIIF_IN_USE		0x0fff
+#define VSCSIIF_NONE		0x0ffe
+
 	/* command between backend and frontend
 	 * VSCSIIF_ACT_SCSI_CDB or VSCSIIF_ACT_SCSI_RESET */
 	unsigned char act;
 	
 	/* Number of pieces of scatter-gather */
 	unsigned int nr_segments;
+	uint8_t sc_data_direction;
 
 	/* do reset function */
 	wait_queue_head_t wq_reset;	/* reset work queue           */
@@ -91,7 +109,8 @@ struct vscsifrnt_shadow {
 
 	/* requested struct scsi_cmnd is stored from kernel */
 	struct scsi_cmnd *sc;
-	int gref[SG_ALL];
+	struct grant **grants_used;
+	struct grant **indirect_grants;
 };
 
 struct vscsifrnt_info {
@@ -103,8 +122,16 @@ struct vscsifrnt_info {
 	unsigned int evtchn;
 	unsigned int irq;
 
-	grant_ref_t ring_ref;
+	grant_ref_t ring_ref[VSCSIIF_MAX_RING_PAGES];
 	struct vscsiif_front_ring ring;
+	unsigned int ring_size;
+	struct vscsiif_response ring_res;
+
+	struct list_head grants;
+	struct list_head indirect_pages;
+	unsigned int max_indirect_segments;
+	unsigned int persistent_gnts_c;
+	unsigned int feature_persistent;
 
 	struct vscsifrnt_shadow shadow[VSCSIIF_MAX_REQS];
 	uint32_t shadow_free;
@@ -112,15 +139,12 @@ struct vscsifrnt_info {
 	struct task_struct *kthread;
 	wait_queue_head_t wq;
 	wait_queue_head_t wq_sync;
-	unsigned int waiting_resp:1;
-	unsigned int waiting_sync:1;
-
-	struct {
-		struct scsi_cmnd *sc;
-		unsigned int rqid;
-		unsigned int done;
-		vscsiif_segment_t segs[];
-	} active;
+	wait_queue_head_t wq_pause;
+	unsigned char waiting_resp;
+	unsigned char waiting_sync;
+	unsigned char waiting_pause;
+	unsigned char pause;
+	unsigned callers;
 };
 
 #define DPRINTK(_f, _a...)				\
@@ -130,7 +154,7 @@ struct vscsifrnt_info {
 int scsifront_xenbus_init(void);
 void scsifront_xenbus_unregister(void);
 int scsifront_schedule(void *data);
+void scsifront_finish_all(struct vscsifrnt_info *info);
 irqreturn_t scsifront_intr(int irq, void *dev_id);
-
 
 #endif /* __XEN_DRIVERS_SCSIFRONT_H__  */

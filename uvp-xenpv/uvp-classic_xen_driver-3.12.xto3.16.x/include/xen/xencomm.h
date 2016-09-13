@@ -39,12 +39,7 @@ extern struct xencomm_handle *xencomm_map(void *ptr, unsigned long bytes);
 extern struct xencomm_handle *__xencomm_map_no_alloc(void *ptr,
 			unsigned long bytes,  struct xencomm_mini *xc_area);
 
-#if 0
-#define XENCOMM_MINI_ALIGNED(xc_desc, n)				\
-	struct xencomm_mini xc_desc ## _base[(n)]			\
-	__attribute__((__aligned__(sizeof(struct xencomm_mini))));	\
-	struct xencomm_mini *xc_desc = &xc_desc ## _base[0];
-#else
+
 /*
  * gcc bug workaround:
  * http://gcc.gnu.org/bugzilla/show_bug.cgi?id=16660
@@ -59,7 +54,7 @@ extern struct xencomm_handle *__xencomm_map_no_alloc(void *ptr,
 		 (sizeof(struct xencomm_mini) -				\
 		  ((unsigned long)xc_desc ## _base) %			\
 		  sizeof(struct xencomm_mini)));
-#endif
+
 #define xencomm_map_no_alloc(ptr, bytes)			\
 	({ XENCOMM_MINI_ALIGNED(xc_desc, 1);			\
 		__xencomm_map_no_alloc(ptr, bytes, xc_desc); })

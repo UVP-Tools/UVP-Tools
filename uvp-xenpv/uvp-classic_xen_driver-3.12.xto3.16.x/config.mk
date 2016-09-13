@@ -18,6 +18,10 @@ ifeq ("3.16.6", "$(OSVERSION)")
   _XEN_CPPFLAGS += -DOPENSUSE_1302
 endif
 
+VERSION := $(shell cat /etc/SuSE-release | grep VERSION | awk -F" " '{print $$3}')
+PATCHLEVEL := $(shell cat /etc/SuSE-release | grep PATCHLEVEL | awk -F" " '{print $$3}')
+OSTYPE := "SUSE$(VERSION)SP$(PATCHLEVEL)"
+
 AUTOCONF := $(shell find $(CROSS_COMPILE_KERNELSOURCE) -name autoconf.h)
 
 _XEN_CPPFLAGS += -include $(AUTOCONF)

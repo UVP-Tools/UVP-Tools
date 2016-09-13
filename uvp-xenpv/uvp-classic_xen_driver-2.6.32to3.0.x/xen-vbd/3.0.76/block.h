@@ -61,11 +61,7 @@
 
 #define DPRINTK(_f, _a...) pr_debug(_f, ## _a)
 
-#if 0
-#define DPRINTK_IOCTL(_f, _a...) pr_alert(_f, ## _a)
-#else
 #define DPRINTK_IOCTL(_f, _a...) ((void)0)
-#endif
 
 struct xlbd_major_info
 {

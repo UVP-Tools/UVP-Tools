@@ -1157,30 +1157,6 @@ int blkif_release(struct gendisk *disk, fmode_t mode)
 	bdput(bd);
 	if (bd->bd_openers)
 		return 0;
-#if 0
-	/*
-	 * Check if we have been instructed to close. We will have
-	 * deferred this request, because the bdev was still open.
-	 */
-	mutex_lock(&info->mutex);
-	xbdev = info->xbdev;
-
-	if (xbdev && xbdev->state == XenbusStateClosing) {
-		/* pending switch to state closed */
-		dev_info(disk_to_dev(disk), "releasing disk\n");
-		blkfront_closing(info);
- 	}
-
-	mutex_unlock(&info->mutex);
-
-	if (!xbdev) {
-		/* sudden device removal */
-		dev_info(disk_to_dev(disk), "releasing disk\n");
-		blkfront_closing(info);
-		disk->private_data = NULL;
-		kfree(info);
-	}
-#endif
 
 	return 0;
 }
@@ -2026,29 +2002,7 @@ static int blkif_recover(struct blkfront_info *info,
 		/* Grab a request slot and copy shadow state into it. */
 		ent = list_first_entry(&info->resume_list,
 					 struct blk_resume_entry, list);
-#if 0
-		blkif_request_t *req =
-			RING_GET_REQUEST(&info->ring, info->ring.req_prod_pvt);
-		unsigned int i;
 
-		*req = ent->copy.req;
-
-		/* We get a new request id, and must reset the shadow state. */
-		req->u.rw.id = GET_ID_FROM_FREELIST(info);
-		info->shadow[req->u.rw.id] = ent->copy;
-		info->shadow[req->u.rw.id].req.u.rw.id = req->u.rw.id;
-
-		/* Rewrite any grant references invalidated by susp/resume. */
-		for (i = 0; i < req->u.rw.nr_segments; i++) {
-			gnttab_grant_foreign_access_ref(req->u.rw.seg[i].gref,
-				info->xbdev->otherend_id,
-				pfn_to_mfn(ent->copy.grants_used[i]->pfn),
-				rq_data_dir(ent->copy.request) ?
-				GTF_readonly : 0);
-		}
-
-		info->ring.req_prod_pvt++;
-#endif
 		merge_bio.head = ent->copy.request->bio;
 		merge_bio.tail = ent->copy.request->biotail;
 		bio_list_merge(&bio_list, &merge_bio);

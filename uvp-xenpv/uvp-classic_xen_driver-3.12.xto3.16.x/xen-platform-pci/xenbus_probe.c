@@ -908,6 +908,8 @@ void xenbus_suspend(void)
 	xs_suspend();
 }
 
+void xen_unplug_emulated_devices(void);
+
 void xenbus_resume(void)
 {
 	xb_init_comms();
@@ -915,6 +917,7 @@ void xenbus_resume(void)
 	if (!xenbus_frontend.error)
 		bus_for_each_dev(&xenbus_frontend.bus, NULL, NULL, resume_dev);
 	xenbus_backend_resume(resume_dev);
+	xen_unplug_emulated_devices();
 }
 
 void xenbus_suspend_cancel(void)
