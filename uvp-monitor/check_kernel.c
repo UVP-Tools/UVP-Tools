@@ -202,10 +202,13 @@ static char * get_issue_info(void)
     } else if ( (NULL != strcasestr(issue_fix, "debian")) || (NULL != strcasestr(issue_fix, "ubuntu")) ) {
         os_rel = DEBIAN_RELEASE;
     } else {
+        fclose(filp);
+        filp = NULL;
         return NULL;
     }
 
     fclose(filp);
+    filp = NULL;
 
     return os_rel;
 }

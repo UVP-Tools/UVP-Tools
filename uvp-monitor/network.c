@@ -1217,8 +1217,8 @@ int GetBondVifGateway(const char *ifname,char **gateway)
         return 0;
     }
     (void)memset_s(pathBuf, MAX_NICINFO_LENGTH, 0, MAX_NICINFO_LENGTH);
-	/*比拼时提供的shell命令，通过route -n获取网关信息*/
-    (void)snprintf_s(pathBuf, MAX_NICINFO_LENGTH, MAX_NICINFO_LENGTH, 
+    /*比拼时提供的shell命令，通过route -n获取网关信息*/
+    (void)snprintf_s(pathBuf, MAX_NICINFO_LENGTH, MAX_NICINFO_LENGTH,
             "route -n | grep -i \"%s$\" | grep 0.0.0.0 | grep UG | awk '{print $2}'", ifname);
     iRet = openPipe(pathBuf, "r");
     if (NULL == iRet)
@@ -1228,25 +1228,24 @@ int GetBondVifGateway(const char *ifname,char **gateway)
        NetworkDestroy(skt);
        return 0;
     }
-	/*保存读取的网关信息*/
+    /*保存读取的网关信息*/
     if(NULL != fgets(pszGatewayBuf,sizeof(pszGatewayBuf),iRet))
     {
        (void)sscanf_s(pszGatewayBuf,"%s",pszGateway,sizeof(pszGateway));
     }
     trim(pszGateway);
-	/*没网关信息则置0*/
+    /*没网关信息则置0*/
     if(strlen(pszGateway) < 1)
-    {      
-       //pszGateway[0]='0';
-         (void)pclose(iRet);
+    {
+        (void)pclose(iRet);
+        iRet = NULL;
         NetworkDestroy(skt);
-       *gateway = NULL;
-       return 0;
+        *gateway = NULL;
+        return 0;
     }
     (void)pclose(iRet);
-	/*lint -e684 */   
-    *gateway = pszGateway;
-	/*lint +e684 */   
+    iRet = NULL;
+    (void)strncpy_s(*gateway, VIF_NAME_LENGTH, pszGateway, strlen(pszGateway));
     NetworkDestroy(skt);
     return 1;
 }
