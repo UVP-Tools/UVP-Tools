@@ -1272,11 +1272,10 @@ static int is_device_connecting(struct device *dev, void *data)
 
 static int exists_connecting_device(struct device_driver *drv)
 {
-    /* add for vmdq migrate.When the device is vmdq_vnic ,return */
-	if(0 == strcmp(drv->name, VMDQ_VNIC)){
-        return 0;
-	}
-    
+	/* add for vmdq migrate. When the device is vmdq_vnic ,return */
+	if (drv && drv->name && (0 == strcmp(drv->name, VMDQ_VNIC)))
+		return 0;
+
 	if (xenbus_frontend.error)
 		return xenbus_frontend.error;
 	return bus_for_each_dev(&xenbus_frontend.bus, NULL, drv,

@@ -1081,10 +1081,10 @@ static int blkif_queue_request(struct request *req)
 		sg = info->shadow[id].sg + i;
 		fsect = sg->offset >> 9;
 		lsect = fsect + (sg->length >> 9) - 1;
-			
+
 		if ((ring_req->operation == BLKIF_OP_INDIRECT) &&
 			(i % SEGS_PER_INDIRECT_FRAME == 0)) {
-			unsigned long pfn;
+			unsigned long pfn = 0UL;
 
 			if (segments)
 				kunmap_atomic(segments, KM_USER0);
@@ -1583,29 +1583,6 @@ static int blkif_recover(struct blkfront_info *info)
 		/* Not in use? */
 		if (!copy[i].request)
 			continue;
-
-#if 0
-		/* Grab a request slot and copy shadow state into it. */
-		req = RING_GET_REQUEST(&info->ring, info->ring.req_prod_pvt);
-		*req = copy[i].req;
-
-		/* We get a new request id, and must reset the shadow state. */
-		req->u.rw.id = GET_ID_FROM_FREELIST(info);
-		memcpy(&info->shadow[req->u.rw.id], &copy[i], sizeof(copy[i]));
-
-		/* Rewrite any grant references invalidated by susp/resume. */
-		for (j = 0; j < req->u.rw.nr_segments; j++)
-			gnttab_grant_foreign_access_ref(
-				req->u.rw.seg[j].gref,
-				info->xbdev->otherend_id,
-				pfn_to_mfn(info->shadow[req->u.rw.id].grants_used[j]->pfn),
-				rq_data_dir(
-					(struct request *)
-					info->shadow[req->u.rw.id].request));
-		info->shadow[req->u.rw.id].req = *req;
-
-		info->ring.req_prod_pvt++;
-#endif
 
 		merge_bio.head = copy[i].request->bio;
 		merge_bio.tail = copy[i].request->biotail;
