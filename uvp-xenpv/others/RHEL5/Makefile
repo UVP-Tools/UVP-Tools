@@ -22,8 +22,6 @@ obj-m += xen-balloon/
 obj-m += xen-vbd/
 obj-m += xen-vnif/
 obj-m += xen-scsi/
-obj-m += xen-vmdq/
-obj-m += xen-hcall/
 ifneq ($(RHEL55_VBD), )
 vbd_path = 2.6.18-194
 endif

@@ -79,8 +79,6 @@ int xen_store_evtchn;
 EXPORT_SYMBOL(xen_store_evtchn);
 #endif
 
-#define VMDQ_VNIC "vmdq_vnic"
-
 struct xenstore_domain_interface *xen_store_interface;
 static unsigned long xen_store_mfn;
 
@@ -159,12 +157,6 @@ static void free_otherend_watch(struct xenbus_device *dev)
 int read_otherend_details(struct xenbus_device *xendev,
 				 char *id_node, char *path_node)
 {
-
-    /* add for vmdq migrate.When the device is vmdq_vnic ,return */
-	if(0 == strcmp(xendev->devicetype, VMDQ_VNIC)){
-        return 0;
-	}
-    
 	int err = xenbus_gather(XBT_NIL, xendev->nodename,
 				id_node, "%i", &xendev->otherend_id,
 				path_node, NULL, &xendev->otherend,
@@ -310,11 +302,6 @@ static int talk_to_otherend(struct xenbus_device *dev)
 
 static int watch_otherend(struct xenbus_device *dev)
 {
-    /* add for vmdq migrate.When the device is vmdq_vnic ,return */
-	if(0 == strcmp(dev->devicetype, VMDQ_VNIC)){
-        return 0;
-	}
-    
 #if defined(CONFIG_XEN) || defined(MODULE)
 	return xenbus_watch_path2(dev, dev->otherend, "state",
 				  &dev->otherend_watch, otherend_changed);
@@ -1403,10 +1390,6 @@ static int is_device_connecting(struct device *dev, void *data)
 
 static int exists_connecting_device(struct device_driver *drv)
 {
-	/* add for vmdq migrate. When the device is vmdq_vnic ,return */
-	if (drv && drv->name && (0 == strcmp(drv->name, VMDQ_VNIC)))
-		return 0;
-
 	if (xenbus_frontend.error)
 		return xenbus_frontend.error;
 	return bus_for_each_dev(&xenbus_frontend.bus, NULL, drv,

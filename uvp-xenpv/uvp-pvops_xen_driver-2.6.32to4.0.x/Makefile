@@ -16,8 +16,6 @@ COMPILEFLAGS=$(CROSSCOMPILE)
 
 vnif_path=other
 
-obj-m := xen-hcall/
-
 ifeq ($(NO_PROCFS), )
 obj-m += xen-procfs/
 endif

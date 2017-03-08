@@ -16,8 +16,6 @@ obj-m += xen-platform-pci/
 obj-m += xen-balloon/
 obj-m += xen-vbd/
 obj-m += xen-vnif/
-obj-m += xen-hcall/
-obj-m += xen-vmdq/
 ifeq (2.6.32, $(OSVERSION))
 ifeq (x86_64, $(KERNELARCH))
 reboot=reboot_64.c
@@ -60,9 +58,6 @@ lnfile:
 	@set -e; \
 	for dir in $(obj-m); \
 	do \
-		if [ "xen-hcall/" == "$$dir" ] || [ "xen-vmdq/" == "$$dir" ]; then \
-			continue; \
-		fi; \
 		cd $$dir; \
 		for file in `ls $(OSVERSION)`; \
 		do \

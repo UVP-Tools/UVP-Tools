@@ -18,7 +18,6 @@ obj-m += xen-scsi/
 endif
 obj-m += xen-vbd/
 obj-m += xen-vnif/
-obj-m += xen-hcall/
 
 ifeq ("SUSE12SP1", $(OSTYPE))
 OSVERSION=3.12.49
@@ -38,7 +37,7 @@ lnfile:
 	@set -e; \
 	for dir in $(obj-m); \
 	do \
-		if [ "xen-hcall/" = "$$dir" ] || [ "xen-balloon/" = "$$dir" ] || [ "xen-scsi/" = "$$dir" ]; then \
+		if [ "xen-balloon/" = "$$dir" ] || [ "xen-scsi/" = "$$dir" ]; then \
 			continue; \
 		fi; \
 		if [ "xen-vbd/" = "$$dir" ] && [ "3.16.6" = "$(OSVERSION)" ]; then \

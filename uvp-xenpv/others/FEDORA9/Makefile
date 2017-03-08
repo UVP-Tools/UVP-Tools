@@ -14,8 +14,6 @@ obj-m += xen-platform-pci/
 obj-m += xen-balloon/
 obj-m += xen-vbd/
 obj-m += xen-vnif/
-obj-m += xen-vmdq/
-obj-m += xen-hcall/
 
 all:
 	make -C $(KERNDIR) M=$(M) modules $(COMPILEFLAGS)
