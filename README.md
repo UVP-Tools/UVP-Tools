@@ -14,7 +14,6 @@ Components of the Xen front-end driver:
   - xen-vbd/xen-blkfront driver: Xen front-end disk driver.
   - xen-vnif/xen-netfront driver: Xen front-end NIC driver.
   - xen-scsi/xen-scsifront driver: Xen front-end PV SCSI driver.
-  - xen-hcall driver: synchronizes VM time with host clock through Xen hypercall.
   - xen-procfs driver: provides the xenbus driver and adapts to the VMs that use pvops kernel but does not provide /proc/xen/xenbus or /dev/xen/xenbus interfaces.
   - vni driver: virtio driver.
 
