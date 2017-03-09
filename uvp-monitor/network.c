@@ -35,6 +35,7 @@
 #include "securec.h"
 #include <ctype.h>
 #include "uvpmon.h"
+#include <errno.h>
 
 #define NIC_MAX  15
 //#define SRIOV_NIC  "00:ff:ff"
@@ -91,6 +92,7 @@ typedef struct
 VIF_BOUND_INFO BoundInfo;
 extern int uvpPopen(const char *pszCmd, char *pszBuffer, int size);
 extern FILE *openPipe(const char *pszCommand, const char *pszType);
+extern int CheckName(const char * name);
 
 /*****************************************************************************
 Function   : opendevfile
@@ -182,28 +184,33 @@ int GetVifGateway(int skt, const char *ifname)
     char pszGatewayBuf[VIF_NAME_LENGTH] = {0};
     FILE *iRet;
     (void)memset_s(pathBuf, MAX_NICINFO_LENGTH, 0, MAX_NICINFO_LENGTH);
+
+    if(SUCC != CheckName(ifname))
+    {
+        return ERROR;
+    }
+
     /*比拼时提供的shell命令，通过route -n获取网关信息*/
     (void)snprintf_s(pathBuf, MAX_NICINFO_LENGTH,  MAX_NICINFO_LENGTH,
                     "route -n | grep -i \"%s$\" | grep UG | awk '{print $2}'", ifname);
     iRet = openPipe(pathBuf, "r");
     if (NULL == iRet)
     {
-       DEBUG_LOG("Failed to exec route shell command.");
-       gtNicInfo.info[gtNicInfo.count].gateway[0] = '\0';
-       return ERROR;
+        DEBUG_LOG("Failed to exec route shell command.");
+        gtNicInfo.info[gtNicInfo.count].gateway[0] = '\0';
+        return ERROR;
     }
     /*保存读取的网关信息*/
     if(NULL != fgets(pszGatewayBuf,sizeof(pszGatewayBuf),iRet))
     {
-       (void)sscanf_s(pszGatewayBuf,"%s",pszGateway,sizeof(pszGateway));
+        (void)sscanf_s(pszGatewayBuf,"%s",pszGateway,sizeof(pszGateway));
     }
     trim(pszGateway);
     /*没网关信息则置0*/
     if(strlen(pszGateway) < 1)
     {      
-       pszGateway[0]='0';
-       
-       pszGateway[1]='\0';
+        pszGateway[0]='0';
+        pszGateway[1]='\0';
     }
     (void)pclose(iRet);
     (void)strncpy_s(gtNicInfo.info[gtNicInfo.count].gateway, 16, pszGateway, strlen(pszGateway));
@@ -314,14 +321,14 @@ int GetFlux(int skt, char *ifname)
 
     if(0 == strlen(line))
     {
-    	DEBUG_LOG("line is NULL.");
+    	DEBUG_LOG("Line is NULL.");
         return ERROR;
     }
 
     foundStr = strstr(line, ifname);
     if (NULL == foundStr)
     {
-    	DEBUG_LOG("foundStr is NULL.");
+    	DEBUG_LOG("foundStr is NULL, line=%s, ifname=%s.", line, ifname);
         return ERROR;
     }
     /*找到第一个数据项*/
@@ -377,7 +384,7 @@ int getVifData(char *pline, int nNumber, char *out)
 
     if(NULL == pline || NULL == out)
     {
-    	DEBUG_LOG("pline or out is NULL.");
+    	DEBUG_LOG("pline=%p out=%p.", pline, out);
         return ERROR;
     }
 
@@ -423,13 +430,13 @@ int getFluxinfoLine(char *ifname, char *pline)
 
     if(NULL == ifname || NULL == pline)
     {
-    	DEBUG_LOG("ifname or pline is NULL.");
+    	DEBUG_LOG("pline=%p ifname=%p.", pline, ifname);
         return ERROR;
     }
 
     if(NULL == (file = opendevfile(path)))
     {
-    	DEBUG_LOG("getFluxinfoLine:failed to open /proc/net/dev.");
+    	DEBUG_LOG("Failed to open /proc/net/dev.");
         return ERROR;
     }
 
@@ -536,7 +543,7 @@ int GetVifInfo()
 	skt = openNetSocket();
 	if (ERROR == skt)
 	{
-		DEBUG_LOG("GetVifInfo:failed to openNetSocket.");
+		DEBUG_LOG("Failed to openNetSocket.");
 		return ERROR;
 	}
 
@@ -550,14 +557,14 @@ int GetVifInfo()
 	if(NULL == (file = opendevfile(path)))
 	{
 		NetworkDestroy(skt);
-		DEBUG_LOG("GetVifInfo:failed to open /proc/net/dev.");
+		DEBUG_LOG("Failed to open /proc/net/dev.");
 		return ERROR;
 	}
 	/*去掉/proc/net/dev文件的前面两行(表头信息)*/
 	if (getline(&line, &linelen, file) == -1 /* eat line */
 	|| getline(&line, &linelen, file) == -1) 
 	{
-		DEBUG_LOG("GetVifInfo:remove /proc/net/dev head");
+		DEBUG_LOG("Remove /proc/net/dev head.");
 	}
 	/*按行遍历剩下的文本信息*/
 	while(getline(&line, &linelen, file) != -1)
@@ -567,7 +574,7 @@ int GetVifInfo()
 		/*info bond*/
 		if (NULL != strstr(namebuf, "bond"))
 		{
-			DEBUG_LOG("has bond model.");
+			DEBUG_LOG("Has bond model.");
 			continue;
 		}
 		if (NULL != strstr(namebuf, "eth") || NULL != strstr(namebuf, "Gmn"))
@@ -619,7 +626,7 @@ int GetVifInfo()
 		gtNicInfo.count=num;   
 		if (num >= NIC_MAX)
 		{
-			DEBUG_LOG("GetVifInfo only support 15 nics ");
+			DEBUG_LOG("Only support 15 nics ");
 			break;
 		}     
 	}
@@ -655,7 +662,7 @@ void networkctlmon(void *handle)
 	{
 		write_to_xenstore(handle, VIF_DATA_PATH, "error");
 		write_to_xenstore(handle, VIFEXTRA_DATA_PATH, "error");
-		DEBUG_LOG("GetVifInfo:num is ERROR.");
+		DEBUG_LOG("Num is ERROR.");
 		return;
 	}
 	/* 向xenstore写入字符0 */
@@ -879,66 +886,66 @@ Return     : SUCC OR ERROR
 *****************************************************************************/
 int  getVifInfo_forbond()
 {
-  int skfd;
-  FILE *fp;
-  char *line = NULL;
-  size_t linelen = 0;
-  char left_ifname[10] = {0};   
-  struct ifreq ifr;
-  fp =  opendevfile("/proc/net/dev");
-  if(NULL == fp )
-  {
-    return -1;
-  }
-  skfd=socket(AF_INET, SOCK_DGRAM, 0);
+    int skfd;
+    FILE *fp;
+    char *line = NULL;
+    size_t linelen = 0;
+    char left_ifname[10] = {0};   
+    struct ifreq ifr;
+
+    fp =  opendevfile("/proc/net/dev");
+    if(NULL == fp )
+    {
+        return -1;
+    }
+    skfd=socket(AF_INET, SOCK_DGRAM, 0);
   
-  if (ERROR == skfd)
-  {
-        DEBUG_LOG("getVifInfo_forbond:failed to openNetSocket.");
+    if (ERROR == skfd)
+    {
+        DEBUG_LOG("Failed to openNetSocket.");
         fclose(fp);
         return ERROR;
-  }
+    }
   
-  if (getline(&line, &linelen, fp) == -1 /* eat line */
+    if (getline(&line, &linelen, fp) == -1 /* eat line */
         || getline(&line, &linelen, fp) == -1) 
-  {
-       DEBUG_LOG("eat two lines \n");
-  }
+    {
+        DEBUG_LOG("Eat two lines.");
+    }
   
-  gtNicInfo_bond.count = 0;
-  while (getline(&line, &linelen, fp) != -1)
-  {
-    char *s, *name;
-    s = GetVifName(&name, line);
-    if(NULL == s)
+    gtNicInfo_bond.count = 0;
+    while (getline(&line, &linelen, fp) != -1)
     {
-        INFO_LOG("GetVifName is NULL  %s",s);
-    }
-    INFO_LOG("getVifInfo_forbond vif name is %s",name);
-    if (strcmp(name, "lo") == 0 || strcmp(name, "sit0") == 0)
-    {
-       continue;
-    }
-    memset_s(left_ifname,10,0,10);
-    left(left_ifname,name,4);
-    if(strcmp(left_ifname, "bond") == 0)
-    {         
+        char *s, *name;
+        s = GetVifName(&name, line);
+        if(NULL == s)
+        {
+            INFO_LOG("GetVifName is NULL.");
+        }
+        INFO_LOG("getVifInfo_forbond vif name is %s.", name);
+        if (strcmp(name, "lo") == 0 || strcmp(name, "sit0") == 0)
+        {
+            continue;
+        }
         memset_s(left_ifname,10,0,10);
-        continue;
-    }
-    memset_s(left_ifname,10,0,10);
-    left(left_ifname,name,6);
-    if(strcmp(left_ifname, "virbr0") == 0)
-    {
+        left(left_ifname,name,4);
+        if(strcmp(left_ifname, "bond") == 0)
+        {         
+            memset_s(left_ifname,10,0,10);
+            continue;
+        }
         memset_s(left_ifname,10,0,10);
-        continue;
-    }
-    strncpy_s(ifr.ifr_name, IFNAMSIZ, name, IFNAMSIZ-1);
-    ifr.ifr_name[IFNAMSIZ - 1] = '\0';
-    if (!(ioctl(skfd, SIOCGIFHWADDR, (char *)&ifr)))
-    {
-      
-      (void)snprintf_s(gtNicInfo_bond.info[gtNicInfo_bond.count].mac, 
+        left(left_ifname,name,6);
+        if(strcmp(left_ifname, "virbr0") == 0)
+        {
+            memset_s(left_ifname,10,0,10);
+            continue;
+        }
+        strncpy_s(ifr.ifr_name, IFNAMSIZ, name, IFNAMSIZ-1);
+        ifr.ifr_name[IFNAMSIZ - 1] = '\0';
+        if (!(ioctl(skfd, SIOCGIFHWADDR, (char *)&ifr)))
+        {      
+            (void)snprintf_s(gtNicInfo_bond.info[gtNicInfo_bond.count].mac, 
                         sizeof(gtNicInfo_bond.info[gtNicInfo_bond.count].mac), 
                         sizeof(gtNicInfo_bond.info[gtNicInfo_bond.count].mac), 
                         "%02x:%02x:%02x:%02x:%02x:%02x",
@@ -949,27 +956,25 @@ int  getVifInfo_forbond()
                        (unsigned char)ifr.ifr_hwaddr.sa_data[4],
                        (unsigned char)ifr.ifr_hwaddr.sa_data[5]);
 
-        (void)snprintf_s(gtNicInfo_bond.info[gtNicInfo_bond.count].ifname, 
+            (void)snprintf_s(gtNicInfo_bond.info[gtNicInfo_bond.count].ifname, 
                         sizeof(gtNicInfo_bond.info[gtNicInfo_bond.count].ifname), 
                         sizeof(gtNicInfo_bond.info[gtNicInfo_bond.count].ifname), 
                         "%s", name);
-        gtNicInfo_bond.count++;
+            gtNicInfo_bond.count++;
+        }
+        if(gtNicInfo_bond.count >= NIC_MAX)
+        {
+            INFO_LOG("The monitor only support 15 nics gtNicInfo_bond.count=%d.", gtNicInfo_bond.count);
+            break;
+        }
     }
-    if(gtNicInfo_bond.count >= NIC_MAX)
+    if(line)
     {
-         INFO_LOG("the monitor only support 15 nics  gtNicInfo_bond.count = %d",gtNicInfo_bond.count);
-         //goto END;
-         break;
+        free(line);
     }
-  }
-  if(line)
-  {
-      free(line);
-  }
-  fclose(fp);
-  NetworkDestroy(skfd);
-  return gtNicInfo_bond.count;
-
+    fclose(fp);
+    NetworkDestroy(skfd);
+    return gtNicInfo_bond.count;
 }
 
 /*****************************************************************************
@@ -997,7 +1002,7 @@ int getXenVif(char *vifname)
     (void)fgets(vifdriver, 1024, pFileVer);
     if(strstr((char *)vifdriver, "xen:vif"))
     {         
-        INFO_LOG("this is a nomorl nic name = %s",vifdriver);
+        INFO_LOG("This is a nomorl nic name=%s.", vifdriver);
         fclose(pFileVer);
         return 1;
     }
@@ -1023,7 +1028,7 @@ int getVifNameFromBond(char *bondname)
 	char *nexttoken1 = NULL;
 	char *nexttoken2 = NULL;
 	struct ifreq ifrequest;
-	INFO_LOG("enter the getVifNameFromBond");
+	INFO_LOG("Enter the getVifNameFromBond.");
 	(void)snprintf_s(CurrentPath, 128, 128, "/sys/class/net/%s/bonding/slaves", bondname);
 	int skt;
 	skt = openNetSocket();
@@ -1041,7 +1046,7 @@ int getVifNameFromBond(char *bondname)
 	(void)fgets(vifname, 256, pFileVer);
 	//fget读取文件会加完换行符再加 \0
 	vifname[strlen(vifname)-1] = '\0';
-	INFO_LOG("vifname = %s",vifname);
+	INFO_LOG("vifname=%s.", vifname);
 	fclose(pFileVer);
 	(void)memset_s(arGet,VIF_NAME_LENGTH,0,VIF_NAME_LENGTH);
 	for(szGet = strtok_s(vifname, arZe, &nexttoken1); szGet != NULL; szGet = strtok_s(NULL, arZe, &nexttoken2))
@@ -1049,7 +1054,7 @@ int getVifNameFromBond(char *bondname)
 		(void)memset_s(arGet,VIF_NAME_LENGTH,0,VIF_NAME_LENGTH);
 		strncpy_s(arGet, VIF_NAME_LENGTH, szGet, strlen(szGet));
 		szGet = NULL;
-		INFO_LOG("this is a  nic name arGet = %s",arGet);
+		INFO_LOG("This is a nic name arGet=%s.", arGet);
 		if(getXenVif(arGet))
 		{
 	        (void)memset_s(BoundInfo.info[BoundInfo.count].vifname, VIF_NAME_LENGTH, 0, VIF_NAME_LENGTH);
@@ -1094,7 +1099,7 @@ int getVifNameFromBond(char *bondname)
 	        }            
 		}
 	}  
-    INFO_LOG("exit the getVifNameFromBond IsBondNic \n"); 
+    INFO_LOG("Exit the getVifNameFromBond IsBondNic."); 
 	NetworkDestroy(skt);
 	return BoundInfo.count;
 }
@@ -1107,60 +1112,59 @@ Return     : 0 OR 非0
 *****************************************************************************/
 int  reset_bond_file()
 {
-  FILE *fp;
-  char *line = NULL;
-  size_t linelen = 0;
-  char left_ifname[10] = {0};   
-  char bondname_tmp[VIF_NAME_LENGTH] = {0};
-  int bond_count = 0;
-  INFO_LOG("enter the reset_bond_file\n");
-  BoundInfo.count = 0;
-  fp =  opendevfile("/proc/net/dev");
-  if(NULL == fp)
-  {
-      ERR_LOG("open the file fail(/proc/net/dev)");
-      return -1;
-  }
-  if (getline(&line, &linelen, fp) == -1 /* eat line */
-        || getline(&line, &linelen, fp) == -1) 
-  {}
-  while (getline(&line, &linelen, fp) != -1)
-  {
-    char *s, *name;
-    s = GetVifName(&name, line);
-    if(NULL == s)
+    FILE *fp;
+    char *line = NULL;
+    size_t linelen = 0;
+    char left_ifname[10] = {0};   
+    char bondname_tmp[VIF_NAME_LENGTH] = {0};
+    int bond_count = 0;
+    INFO_LOG("Enter the reset_bond_file.");
+    BoundInfo.count = 0;
+
+    fp =  opendevfile("/proc/net/dev");
+    if(NULL == fp)
     {
-        INFO_LOG("GetVifName is NULL = %s",s);
+        ERR_LOG("Open file /proc/net/dev failed, errno=%d.", errno);
+        return -1;
     }
-    (void)memset_s(left_ifname,10,0,10);
-    left(left_ifname,name,4);
-    if(strcmp(left_ifname, "bond") == 0)
-    {         
-        INFO_LOG("this is a bond ,not nic name = %s",name);
-        (void)memset_s(left_ifname,10,0,10);
-        
-        (void)memset_s(bondname_tmp, VIF_NAME_LENGTH, 0, VIF_NAME_LENGTH);
-        (void)snprintf_s(bondname_tmp, VIF_NAME_LENGTH, VIF_NAME_LENGTH, "%s", name);
-        (void)memset_s(BoundInfo.info[BoundInfo.count].bondname, VIF_NAME_LENGTH, 0, VIF_NAME_LENGTH);
-        BoundInfo.info[BoundInfo.count].release_count = 0;
-        strncpy_s(BoundInfo.info[BoundInfo.count].bondname, VIF_NAME_LENGTH, bondname_tmp, sizeof(bondname_tmp)-1);
-        //end by '\0' 2013-10-23
-        BoundInfo.info[BoundInfo.count].bondname[sizeof(bondname_tmp)-1]='\0';
-        INFO_LOG("BoundInfo.info[%d].bondname = %s\n",BoundInfo.count,BoundInfo.info[BoundInfo.count].bondname);
-        
-        if(getVifNameFromBond(name))
+    if (getline(&line, &linelen, fp) == -1 /* eat line */
+        || getline(&line, &linelen, fp) == -1) 
+    {}
+    while (getline(&line, &linelen, fp) != -1)
+    {
+        char *s, *name;
+        s = GetVifName(&name, line);
+        if(NULL == s)
         {
-            bond_count++;  
+            INFO_LOG("GetVifName is NULL.");
+        }
+        (void)memset_s(left_ifname,10,0,10);
+        left(left_ifname,name,4);
+        if(strcmp(left_ifname, "bond") == 0)
+        {
+            INFO_LOG("This is a bond, not nic name=%s.", name);
+            (void)memset_s(left_ifname,10,0,10);
+            (void)memset_s(bondname_tmp, VIF_NAME_LENGTH, 0, VIF_NAME_LENGTH);
+            (void)snprintf_s(bondname_tmp, VIF_NAME_LENGTH, VIF_NAME_LENGTH, "%s", name);
+            (void)memset_s(BoundInfo.info[BoundInfo.count].bondname, VIF_NAME_LENGTH, 0, VIF_NAME_LENGTH);
+            BoundInfo.info[BoundInfo.count].release_count = 0;
+            strncpy_s(BoundInfo.info[BoundInfo.count].bondname, VIF_NAME_LENGTH, bondname_tmp, sizeof(bondname_tmp)-1);
+            BoundInfo.info[BoundInfo.count].bondname[sizeof(bondname_tmp)-1]='\0';
+            INFO_LOG("BoundInfo.info[%d].bondname=%s.", BoundInfo.count, BoundInfo.info[BoundInfo.count].bondname);
+
+            if(getVifNameFromBond(name))
+            {
+                bond_count++;  
+            }
         }
     }
-  }
-  if(line)
-  {
-      free(line);
-  }
-  fclose(fp);
-  INFO_LOG("exit the reset_bond_file");
-  return bond_count;
+    if(line)
+    {
+        free(line);
+    }
+    fclose(fp);
+    INFO_LOG("Exit the reset_bond_file.");
+    return bond_count;
 }
 
 /*****************************************************************************
@@ -1174,7 +1178,6 @@ int  GetBondVifIp(const char *ifname,char **vifip)
 {
     struct ifreq ifrequest;
     struct sockaddr_in *pAddr;
-    //char  vifip[16] = {0};
     int skt;
     skt = openNetSocket();
     if (ERROR == skt)
@@ -1216,6 +1219,12 @@ int GetBondVifGateway(const char *ifname,char **gateway)
     {
         return 0;
     }
+
+    if(SUCC != CheckName(ifname))
+    {
+        return ERROR;
+    }
+
     (void)memset_s(pathBuf, MAX_NICINFO_LENGTH, 0, MAX_NICINFO_LENGTH);
     /*比拼时提供的shell命令，通过route -n获取网关信息*/
     (void)snprintf_s(pathBuf, MAX_NICINFO_LENGTH, MAX_NICINFO_LENGTH,
@@ -1276,37 +1285,36 @@ int netbond()
     num =  getVifInfo_forbond();
     if (ERROR == num || 0 == num)
     {
-        ERR_LOG("ERROR   num = %d",num);
+        ERR_LOG("Number error, num=%d.", num);
         return 0;
     }
 
     bond_count = reset_bond_file();
     BoundInfo.count = bond_count;
-    INFO_LOG("BoundInfo.count = %d ",BoundInfo.count);
+    INFO_LOG("BoundInfo.count=%d.", BoundInfo.count);
     for (i = 0; i < num; i++)
     {
  
-        INFO_LOG("gtNicInfo.info[%d].mac = %s",i,gtNicInfo_bond.info[i].mac);
-        INFO_LOG("gtNicInfo.info[%d].ifname = %s",i,gtNicInfo_bond.info[i].ifname); 
+        INFO_LOG("gtNicInfo.info[%d].mac=%s.", i, gtNicInfo_bond.info[i].mac);
+        INFO_LOG("gtNicInfo.info[%d].ifname=%s.", i, gtNicInfo_bond.info[i].ifname); 
         memset_s(left_mac,MAC_NAME_LENGTH,0,MAC_NAME_LENGTH);
         memset_s(right_mac,MAC_NAME_LENGTH,0,MAC_NAME_LENGTH);
 
         left(left_mac,(char *)gtNicInfo_bond.info[i].mac,8);
         right(right_mac,(char *)gtNicInfo_bond.info[i].mac,8);
-        INFO_LOG("left_mac = %s,right_mac = %s",left_mac,right_mac);
-        //strncpy_s
+        INFO_LOG("left_mac=%s, right_mac=%s.",left_mac,right_mac);
         for(j=i+1;j<num;j++)
         {
            memset_s(left_mac_1,MAC_NAME_LENGTH,0,MAC_NAME_LENGTH);
            memset_s(right_mac_1,MAC_NAME_LENGTH,0,MAC_NAME_LENGTH);
            left(left_mac_1,(char *)gtNicInfo_bond.info[j].mac,8);
            right(right_mac_1,(char *)gtNicInfo_bond.info[j].mac,8);
-           INFO_LOG("left_mac_1 = %s,right_mac_1 = %s",left_mac_1,right_mac_1);
+           INFO_LOG("left_mac_1=%s, right_mac_1= %s.",left_mac_1,right_mac_1);
            //  判断方法更改为，直通网卡和普通网卡的右边三位的mac 地址相同且普通网卡的右边三位是
            //FE:FF:FF
            if(strcmp(right_mac, right_mac_1) == 0)
            {
-        	   INFO_LOG("find the bond mac ");
+        	   INFO_LOG("Find the bond mac.");
                    (void)memset_s(BoundInfo.info[BoundInfo.count].sriov_mac, MAC_NAME_LENGTH, 0, MAC_NAME_LENGTH);
                    (void)memset_s(BoundInfo.info[BoundInfo.count].sriov_vifname, VIF_NAME_LENGTH, 0, VIF_NAME_LENGTH);
                    (void)memset_s(BoundInfo.info[BoundInfo.count].mac, MAC_NAME_LENGTH, 0, MAC_NAME_LENGTH);
@@ -1366,7 +1374,7 @@ int netbond()
     }
     if(BoundInfo.count == bond_count)
     {
-        INFO_LOG("there is no new sriov net ");
+        INFO_LOG("There is no new sriov net.");
         return 0;
     }
     (void)memset_s(pszCommand, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
@@ -1375,15 +1383,15 @@ int netbond()
     iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
     if (0 != iRet)
     {
-        ERR_LOG("netbond: call uvpPopen pszCommand=%s Fail ret = %d ",pszCommand, iRet);
+        ERR_LOG("Call uvpPopen pszCommand=%s fail ret=%d.", pszCommand, iRet);
     }
     for(k=bond_count;k<BoundInfo.count;k++)
     {
         BoundInfo.info[k].release_count = 0;
-        INFO_LOG("BoundInfo.info[%d].sriov_mac = %s",k,BoundInfo.info[k].sriov_mac);
-        INFO_LOG("BoundInfo.info[%d].sriov_vifname = %s",k,BoundInfo.info[k].sriov_vifname);
-        INFO_LOG("BoundInfo.info[%d].mac = %s",k,BoundInfo.info[k].mac);
-        INFO_LOG("BoundInfo.info[%d].vifname = %s",k,BoundInfo.info[k].vifname);
+        INFO_LOG("BoundInfo.info[%d].sriov_mac=%s.", k, BoundInfo.info[k].sriov_mac);
+        INFO_LOG("BoundInfo.info[%d].sriov_vifname=%s.", k, BoundInfo.info[k].sriov_vifname);
+        INFO_LOG("BoundInfo.info[%d].mac=%s.", k, BoundInfo.info[k].mac);
+        INFO_LOG("BoundInfo.info[%d].vifname=%s.", k, BoundInfo.info[k].vifname);
 
         (void)memset_s(pszCommand, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
         (void)memset_s(pszBuff, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
@@ -1393,7 +1401,7 @@ int netbond()
         iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
         if (0 != iRet)
         {
-            ERR_LOG("netbond: call uvpPopen pszCommand=%s Fail ret = %d ",pszCommand, iRet);
+            ERR_LOG("Call uvpPopen pszCommand=%s fail ret=%d.", pszCommand, iRet);
         }
         
         (void)memset_s(pszCommand, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
@@ -1404,7 +1412,7 @@ int netbond()
         iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
         if (0 != iRet)
         {
-            ERR_LOG("netbond: call uvpPopen pszCommand=%s Fail ret = %d ",pszCommand, iRet);
+            ERR_LOG("Call uvpPopen pszCommand=%s fail ret=%d.", pszCommand, iRet);
         }
         
         bondvifip = NULL;         
@@ -1413,16 +1421,15 @@ int netbond()
             (void)memset_s(pszCommand, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
             (void)memset_s(pszBuff, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
             (void)snprintf_s(pszCommand, MAX_COMMAND_LENGTH, MAX_COMMAND_LENGTH, "ifconfig bond%d %s", k,bondvifip);
-            INFO_LOG("netbond: call uvpPopen pszCommand=%s bondvifip = %s ",pszCommand, bondvifip);
+            INFO_LOG("Call uvpPopen pszCommand=%s bondvifip=%s.", pszCommand, bondvifip);
             iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
             if (0 != iRet)
             {
-                ERR_LOG("netbond: call uvpPopen pszCommand=%s Fail ret = %d ",pszCommand, iRet);
+                ERR_LOG("Call uvpPopen pszCommand=%s fail ret=%d.", pszCommand, iRet);
             }
         }
-        INFO_LOG("netbond:bondvifip = %s ", bondvifip);
+        INFO_LOG("bondvifip=%s.", bondvifip);
 
-        
         bondvifgateway = NULL;
         if(GetBondVifGateway(BoundInfo.info[k].sriov_vifname,&bondvifgateway))
         {
@@ -1430,17 +1437,17 @@ int netbond()
             (void)memset_s(pszBuff, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
             (void)snprintf_s(pszCommand, MAX_COMMAND_LENGTH, MAX_COMMAND_LENGTH,
                             "route add default gw %s", bondvifgateway);
-            INFO_LOG("netbond: call uvpPopen pszCommand=%s bondvigateway = %s ",pszCommand, bondvifip);
+            INFO_LOG("Call uvpPopen pszCommand=%s bondvigateway=%s.", pszCommand, bondvifip);
             iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
             if (0 != iRet)
             {
-                ERR_LOG("netbond: call uvpPopen pszCommand=%s Fail ret = %d ",pszCommand, iRet);
+                ERR_LOG("Call uvpPopen pszCommand=%s fail ret=%d ", pszCommand, iRet);
             }
         }
-        INFO_LOG("netbond:bondvigateway = %s ", bondvifgateway);
+        INFO_LOG("bondvigateway=%s.", bondvifgateway);
         (void)memset_s(BoundInfo.info[k].bondname, VIF_NAME_LENGTH, 0, VIF_NAME_LENGTH);
         (void)snprintf_s(BoundInfo.info[k].bondname, VIF_NAME_LENGTH, VIF_NAME_LENGTH, "bond%d", k);
-        INFO_LOG("BoundInfo.info[%d].bondname = %s",k,BoundInfo.info[k].bondname);
+        INFO_LOG("BoundInfo.info[%d].bondname=%s.", k, BoundInfo.info[k].bondname);
 
 
         (void)memset_s(pszCommand, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
@@ -1450,7 +1457,7 @@ int netbond()
         iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
         if (0 != iRet)
         {
-            ERR_LOG("netbond: call uvpPopen pszCommand=%s Fail ret = %d ",pszCommand, iRet);
+            ERR_LOG("Call uvpPopen pszCommand=%s fail ret=%d.", pszCommand, iRet);
         }
         
         (void)memset_s(pszCommand, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
@@ -1461,7 +1468,7 @@ int netbond()
         iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
         if (0 != iRet)
         {
-            ERR_LOG("netbond: call uvpPopen pszCommand=%s Fail ret = %d ",pszCommand, iRet);
+            ERR_LOG("Call uvpPopen pszCommand=%s fail ret=%d.", pszCommand, iRet);
         }        
 
         (void)memset_s(pszCommand, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
@@ -1470,7 +1477,7 @@ int netbond()
         iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
         if (0 != iRet)
         {
-            ERR_LOG("netbond: call uvpPopen pszCommand=%s Fail ret = %d ",pszCommand, iRet);
+            ERR_LOG("Call uvpPopen pszCommand=%s fail ret=%d.", pszCommand, iRet);
         } 
         
         (void)memset_s(pszCommand, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
@@ -1481,9 +1488,9 @@ int netbond()
         iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
         if (0 != iRet)
         {
-            ERR_LOG("netbond: call uvpPopen pszCommand=%s Fail ret = %d ",pszCommand, iRet);
+            ERR_LOG("Call uvpPopen pszCommand=%s failed ret=%d.", pszCommand, iRet);
         }  
-        INFO_LOG("netbond: call openPipe pszCommand=%s Fail  ",pszCommand);      
+        INFO_LOG("Call openPipe pszCommand=%s success.", pszCommand);      
 
         (void)memset_s(pszCommand, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
         (void)memset_s(pszBuff, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
@@ -1493,10 +1500,9 @@ int netbond()
         iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
         if (0 != iRet)
         {
-            ERR_LOG("netbond: call uvpPopen pszCommand=%s Fail ret = %d ",pszCommand, iRet);
+            ERR_LOG("Call uvpPopen pszCommand=%s failed ret=%d.", pszCommand, iRet);
         }
             
-
         (void)memset_s(pszCommand, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
         (void)memset_s(pszBuff, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
         (void)snprintf_s(pszCommand, MAX_COMMAND_LENGTH, MAX_COMMAND_LENGTH, 
@@ -1504,7 +1510,7 @@ int netbond()
         iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
         if (0 != iRet)
         {
-            ERR_LOG("netbond: call uvpPopen pszCommand=%s Fail ret = %d ",pszCommand, iRet);
+            ERR_LOG("Call uvpPopen pszCommand=%s failed ret=%d.", pszCommand, iRet);
         }
          
 
@@ -1514,9 +1520,8 @@ int netbond()
         iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
         if (0 != iRet)
         {
-            ERR_LOG("netbond: call uvpPopen pszCommand=%s Fail ret = %d ",pszCommand, iRet);
+            ERR_LOG("Call uvpPopen pszCommand=%s failed ret=%d.", pszCommand, iRet);
         }
-  
 
         (void)memset_s(pszCommand, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
         (void)memset_s(pszBuff, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
@@ -1524,7 +1529,7 @@ int netbond()
         iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
         if (0 != iRet)
         {
-            ERR_LOG("netbond: call uvpPopen pszCommand=%s Fail ret = %d ",pszCommand, iRet);
+            ERR_LOG("Call uvpPopen pszCommand=%s failed ret=%d." ,pszCommand, iRet);
         }   
         //redhat 系统不删除IP，会导致有多个路由，导致网络不通
         (void)memset_s(pszCommand, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
@@ -1533,7 +1538,7 @@ int netbond()
         iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
         if (0 != iRet)
         {
-            ERR_LOG("netbond: call uvpPopen pszCommand=%s Fail ret = %d ",pszCommand, iRet);
+            ERR_LOG("Call uvpPopen pszCommand=%s failed ret=%d.", pszCommand, iRet);
         }   
         (void)memset_s(pszCommand, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
         (void)memset_s(pszBuff, MAX_COMMAND_LENGTH, 0, MAX_COMMAND_LENGTH);
@@ -1542,11 +1547,11 @@ int netbond()
         iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
         if (0 != iRet)
         {
-            ERR_LOG("netbond: call uvpPopen pszCommand=%s Fail ret = %d ",pszCommand, iRet);
+            ERR_LOG("Call uvpPopen pszCommand=%s failed ret = %d.", pszCommand, iRet);
         }                 
               
     }
-    INFO_LOG("BoundInfo.count = %d ",BoundInfo.count);
+    INFO_LOG("BoundInfo.count=%d.", BoundInfo.count);
     return 1;
 }
 
@@ -1564,7 +1569,7 @@ int releasenetbond(void *handle)
 
     char pszCommand[MAX_COMMAND_LENGTH] = {0};
     char pszBuff[MAX_COMMAND_LENGTH] = {0};
-    INFO_LOG("releasenetbond  BoundInfo.count = %d ",BoundInfo.count);
+    INFO_LOG("releasenetbond BoundInfo.count=%d.", BoundInfo.count);
 
     for(k=0;k<BoundInfo.count;k++)
     {
@@ -1577,7 +1582,7 @@ int releasenetbond(void *handle)
         iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
         if (0 != iRet)
         {
-            ERR_LOG("releasenetbond: call uvpPopen pszCommand=%s Fail ret = %d \n",pszCommand, iRet);
+            ERR_LOG("Call uvpPopen pszCommand=%s failed ret=%d.", pszCommand, iRet);
             //命令执行失败
              write_to_xenstore(handle, RELEASE_BOND, "-1");
             return 0;
@@ -1606,18 +1611,18 @@ int ReGetSriovNicInfo()
     char right_mac_1[MAC_NAME_LENGTH] = {0};   
 
     nic_num =  getVifInfo_forbond();
-    INFO_LOG("ReGetSriovNicInfo  num = %d \n",nic_num);
+    INFO_LOG("ReGetSriovNicInfo num=%d.", nic_num);
     if (0 == nic_num)
     {
-        INFO_LOG("getVifInfo_forbond fail  nic_num = %d \n",nic_num);
+        INFO_LOG("getVifInfo_forbond failed.");
         return -1;
     }
 
     sriov_num = 0;
     for (i = 0; i < BoundInfo.count; i++)
     {
-        INFO_LOG("gtNicInfo.info[%d].mac = %s",i,BoundInfo.info[i].mac);
-        INFO_LOG("gtNicInfo.info[%d].ifname = %s",i,BoundInfo.info[i].vifname); 
+        INFO_LOG("gtNicInfo.info[%d].mac=%s.", i, BoundInfo.info[i].mac);
+        INFO_LOG("gtNicInfo.info[%d].ifname=%s.", i, BoundInfo.info[i].vifname); 
         (void)memset_s(BoundInfo.info[i].sriov_mac, MAC_NAME_LENGTH, 0, MAC_NAME_LENGTH);
         (void)memset_s(BoundInfo.info[i].sriov_vifname, VIF_NAME_LENGTH, 0, VIF_NAME_LENGTH);
         memset_s(left_mac,MAC_NAME_LENGTH,0,MAC_NAME_LENGTH);
@@ -1635,7 +1640,7 @@ int ReGetSriovNicInfo()
                 (strcmp(left_mac_1, NORMAL_NIC))&&
                 (strcmp(BoundInfo.info[i].vifname, gtNicInfo_bond.info[j].ifname)))
            {
-                INFO_LOG("this is the sriov nic mac ");
+                INFO_LOG("This is the sriov nic mac.");
                 strncpy_s(BoundInfo.info[i].sriov_mac, MAC_NAME_LENGTH, gtNicInfo_bond.info[j].mac, MAC_NAME_LENGTH-1);
                 //end by '\0' 2013-10-23
                 BoundInfo.info[i].sriov_mac[MAC_NAME_LENGTH-1]='\0';
@@ -1650,7 +1655,7 @@ int ReGetSriovNicInfo()
     }
     if(sriov_num < BoundInfo.count)
     {
-        INFO_LOG("there is no enough sriov net \n");
+        INFO_LOG("There is not enough sriov net, sriov_num=%d, BoundInfo.count=%d.", sriov_num, BoundInfo.count);
         return -1;
     }
     return sriov_num;
@@ -1669,21 +1674,20 @@ int rebondnet(void *handle)
     int iRet = 0;
     char pszCommand[MAX_COMMAND_LENGTH] = {0};
     char pszBuff[MAX_COMMAND_LENGTH] = {0};
-    INFO_LOG("rebondnet BoundInfo.count = %d ",BoundInfo.count);
+    INFO_LOG("Rebondnet BoundInfo.count=%d.", BoundInfo.count);
 
     (void)sleep(2);
     (void)ReGetSriovNicInfo();
     for(j=0;j<BoundInfo.count;j++)
     {
-        
-        INFO_LOG("rebondnet:BoundInfo.info[%d].sriov_mac = %s",j,BoundInfo.info[j].sriov_mac);
-        INFO_LOG("rebondnet:BoundInfo.info[%d].sriov_vifname = %s",j,BoundInfo.info[j].sriov_vifname);
-        INFO_LOG("rebondnet:BoundInfo.info[%d].mac = %s",j,BoundInfo.info[j].mac);
-        INFO_LOG("rebondnet:BoundInfo.info[%d].vifname = %s",j,BoundInfo.info[j].vifname);
-        INFO_LOG("rebondnet:BoundInfo.info[%d].release_count = %d",j,BoundInfo.info[j].release_count);
+        INFO_LOG("BoundInfo.info[%d].sriov_mac=%s.", j, BoundInfo.info[j].sriov_mac);
+        INFO_LOG("BoundInfo.info[%d].sriov_vifname=%s.", j, BoundInfo.info[j].sriov_vifname);
+        INFO_LOG("BoundInfo.info[%d].mac=%s.", j, BoundInfo.info[j].mac);
+        INFO_LOG("BoundInfo.info[%d].vifname=%s.", j, BoundInfo.info[j].vifname);
+        INFO_LOG("BoundInfo.info[%d].release_count=%d.", j, BoundInfo.info[j].release_count);
         if(BoundInfo.info[j].release_count == 0)
         {
-            INFO_LOG("rebondnet:this is no need to rebond the soriov nic  BoundInfo.info[%d].release_count = %d",j,BoundInfo.info[j].release_count);
+            INFO_LOG("This is no need to rebond the soriov nic BoundInfo.info[%d].release_count=%d.", j, BoundInfo.info[j].release_count);
             continue;
         }
         BoundInfo.info[j].release_count = 0;
@@ -1695,7 +1699,7 @@ int rebondnet(void *handle)
         iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
         if (0 != iRet)
         {
-            ERR_LOG("rebondnet: call uvpPopen pszCommand=%s Fail ret = %d \n",pszCommand, iRet);
+            ERR_LOG("Call uvpPopen pszCommand=%s failed ret=%d.", pszCommand, iRet);
         }
 
         
@@ -1707,7 +1711,7 @@ int rebondnet(void *handle)
         iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
         if (0 != iRet)
         {
-            ERR_LOG("rebondnet: call uvpPopen pszCommand=%s Fail ret = %d \n",pszCommand, iRet);
+            ERR_LOG("Call uvpPopen pszCommand=%s failed ret=%d.", pszCommand, iRet);
         }    
 
         
@@ -1718,7 +1722,7 @@ int rebondnet(void *handle)
         iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
         if (0 != iRet)
         {
-            ERR_LOG("rebondnet: call uvpPopen pszCommand=%s Fail ret = %d \n",pszCommand, iRet);
+            ERR_LOG("Call uvpPopen pszCommand=%s failed ret=%d.", pszCommand, iRet);
         }
 
         
@@ -1730,7 +1734,7 @@ int rebondnet(void *handle)
         iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
         if (0 != iRet)
         {
-            ERR_LOG("netbond: call uvpPopen pszCommand=%s Fail ret = %d \n",pszCommand, iRet);
+            ERR_LOG("Call uvpPopen pszCommand=%s failed ret=%d.", pszCommand, iRet);
         }   
         
     }
@@ -1738,8 +1742,4 @@ int rebondnet(void *handle)
     (void)netbond();
     return 1;
 }
-
-
-
-
 

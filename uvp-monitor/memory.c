@@ -107,11 +107,10 @@ int GetMMUseRatio(const char *mem_file, char *meminfo_buf, int size, char *swap_
         {
             start = start + strlen("MemAvailable:");
             /*lMemFree = atol(start);*/
-            printf("start MemAvailable: %s \n", start );
             ulMemAvailable = strtoul(start, NULL, DECIMAL);
             MemAvailable_flag = 1;
         }
-        
+
         /*get buffers memory*/
         start = strstr(tmp_buffer, "Buffers:");
         if ( NULL != start )

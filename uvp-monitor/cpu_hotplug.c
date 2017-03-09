@@ -167,6 +167,7 @@ int uvpPopen(const char* pszCmd, char* pszBuffer, int size)
     }
 
     (void) fclose(fp);
+    fp = NULL;
 
     while (0 > waitpid(pid, &stat, 0))
     {
@@ -216,7 +217,7 @@ int IsSupportCpuHotplug(void)
     ret = uvpPopen(pszHotplugFlagScript, pszHotplugFlag, 1024);
     if (0 != ret)
     {
-        (void)ERR_LOG(" Failed to call uvpPopen, ret = %d.\n", ret);
+        ERR_LOG("Failed to call uvpPopen, ret=%d.", ret);
         return ret;
     }
 
@@ -226,7 +227,7 @@ int IsSupportCpuHotplug(void)
     }
     else
     {
-        (void)INFO_LOG("uvp-monitor: This OS is not supported cpu hotplug.\n");
+        INFO_LOG("This OS is not supported cpu hotplug.");
         return XEN_FAIL;
     }
 }
@@ -250,7 +251,7 @@ int GetSupportMaxnumCpu(void)
     ret = uvpPopen(pszSysCpuNumScript, pszSysCpuNum, 1024);
     if (0 != ret)
     {
-        (void)ERR_LOG(" Failed to call uvpPopen, ret = %d.\n", ret);
+        ERR_LOG("Failed to call uvpPopen, ret=%d.", ret);
         return ret;
     }
 
@@ -327,11 +328,11 @@ int DoCpuHotplug(void * phandle)
     cpu_nr = GetSupportMaxnumCpu();
     if (cpu_nr <= 0)
     {
-        INFO_LOG("uvp-monitor: This OS has unexpectable cpus: %d.\n", cpu_nr);
+        INFO_LOG("This OS has unexpectable cpus: %d.", cpu_nr);
         goto out;
     }
 
-    INFO_LOG("uvp-monitor: This OS has cpu hotplug and less than %d.\n", cpu_nr);
+    INFO_LOG("This OS has cpu hotplug and less than %d.", cpu_nr);
 
     /* obtain cpu numbers */
     for(i = 0; i <= cpu_nr - 1; i++)
@@ -343,6 +344,7 @@ int DoCpuHotplug(void * phandle)
             cpu_enable_num ++;
         }
         free(cpu_online);
+        cpu_online = NULL;
     }
 
     i = 1;
@@ -366,7 +368,7 @@ int DoCpuHotplug(void * phandle)
 
         if (0 != ret)
         {
-            (void)ERR_LOG(" Failed to call uvpPopen, ret = %d.\n", ret);
+            ERR_LOG("Failed to call uvpPopen, ret=%d.", ret);
             idelay++;
             uvp_sleep();
             continue;
@@ -387,7 +389,7 @@ int DoCpuHotplug(void * phandle)
 
         if (0 != ret)
         {
-            (void)ERR_LOG(" Failed to call uvpPopen, ret = %d.\n", ret);
+            ERR_LOG("Failed to call uvpPopen, ret=%d.", ret);
             idelay++;
             uvp_sleep();
             continue;
@@ -395,7 +397,7 @@ int DoCpuHotplug(void * phandle)
 
         if ('1' == pszBuff[0])
         {
-            (void)INFO_LOG("uvp-monitor: cpu%d is always online.\n",i);
+            INFO_LOG("Cpu%d is always online.", i);
             i++;
             idelay = 0;
             continue;
@@ -407,7 +409,7 @@ int DoCpuHotplug(void * phandle)
         ret = uvpPopen(pszCommand, pszBuff, 1024);
         if (0 != ret)
         {
-            (void)ERR_LOG(" Failed to call uvpPopen, ret = %d.\n", ret);
+            ERR_LOG("Failed to call uvpPopen, ret=%d.", ret);
             idelay++;
             uvp_sleep();
             continue;

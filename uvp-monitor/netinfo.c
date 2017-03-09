@@ -35,6 +35,7 @@
 #include "securec.h"
 #include <ifaddrs.h>
 #include <netdb.h>
+#include <errno.h>
 
 #define UPFLAG  1
 #define DOWNFLAG 0
@@ -157,7 +158,7 @@ void GetIpv6NetFlag(int skt,char *vifname)
     {
         if(NULL == (file = opendevfile(vlan_path)))
         {
-            DEBUG_LOG("GetIpv6NetFlag: failed to open /proc/net/vlan/config.");
+            DEBUG_LOG("Failed to open /proc/net/vlan/config.");
             vlanfile_flag = 0;
         }
 
@@ -311,7 +312,7 @@ int GetIpv6Flux(int skt,char *ifname)
     
     if(NULL == (file = opendevfile(path)))
     {
-        DEBUG_LOG("GetVifInfo:failed to open /proc/net/dev.");
+        DEBUG_LOG("Failed to open /proc/net/dev.");
         return ERROR;
     }
     if (NULL == ifname)//for pclint warning
@@ -346,14 +347,14 @@ int GetIpv6Flux(int skt,char *ifname)
     {
         strncpy_s(gtNicIpv6Info.info[gtNicIpv6Info.count].tp, IPV6_FLUX_LEN, ERR_STR, strlen(ERR_STR));
         gtNicIpv6Info.info[gtNicIpv6Info.count].tp[strlen(ERR_STR)] = '\0';
-        DEBUG_LOG("getFluxinfoLine is ERROR.");
+        DEBUG_LOG("getFluxinfoLine failed, ifname=%s.", ifname);
         fclose(file);
         return ERROR;
     }
 
     if(0 == strlen(fluxline))
     {
-        DEBUG_LOG("line is NULL.");
+        DEBUG_LOG("Line is NULL.");
         fclose(file);
         return ERROR;
     }
@@ -361,7 +362,7 @@ int GetIpv6Flux(int skt,char *ifname)
     foundStr = strstr(fluxline, ifname);
     if (NULL == foundStr)
     {
-        DEBUG_LOG("foundStr is NULL.");
+        DEBUG_LOG("foundStr is NULL, fluxline=%s, ifname=%s.", fluxline, ifname);
         fclose(file);
         return ERROR;
     }
@@ -412,11 +413,36 @@ int GetIpv6Flux(int skt,char *ifname)
 }
 
 /*****************************************************************************
+Function   : CheckName
+Description: get Ipv4/6 Gateway
+Input      : const char *name
+Output     : None
+Return     :
+*****************************************************************************/
+int CheckName(const char *name)
+{
+    if(NULL == name)
+    {
+        return ERROR;
+    }
+
+    if(strstr(name, "<") || strstr(name, ">") || strstr(name, "\\") || strstr(name, "/")
+        || strstr(name, "&") || strstr(name, "|") || strstr(name, ";") || strstr(name, "$")
+        || strstr(name, "?") || strstr(name, ",") || strstr(name, "*") || strstr(name, "{")
+        || strstr(name, "}") || strstr(name, "`") || strstr(name, "'") || strstr(name, "\""))
+    {
+        return ERROR;
+    }
+
+    return SUCC;
+}
+
+/*****************************************************************************
 Function   : GetiIpv6VifGateway
 Description: get Ipv4/6 Gateway
 Input       : None
 Output     : None
-Return     : 
+Return     :
 *****************************************************************************/
 int GetIpv4VifGateway(int skt, const char *ifname)
 {
@@ -429,7 +455,12 @@ int GetIpv4VifGateway(int skt, const char *ifname)
     {
         return ERROR;
     }
-    
+
+    if(SUCC != CheckName(ifname))
+    {
+        return ERROR;
+    }
+
     (void)memset_s(pathBuf, MAX_NICINFO_LENGTH, 0, MAX_NICINFO_LENGTH);
     /*exec shell command to get ipv4 route gataway info*/
     (void)snprintf_s(pathBuf, MAX_NICINFO_LENGTH, MAX_NICINFO_LENGTH,
@@ -437,21 +468,21 @@ int GetIpv4VifGateway(int skt, const char *ifname)
     iRet = openPipe(pathBuf, "r");
     if (NULL == iRet)
     {
-       DEBUG_LOG("Failed to exec route shell command.");
+       DEBUG_LOG("Failed to exec route shell command, pathBuf=%s.", pathBuf);
        gtNicIpv6Info.info[gtNicIpv6Info.count].gateway[0] = '\0';
        return ERROR;
     }
-    
+
     /*save default gw*/
     if(NULL != fgets(pszGatewayBuf,sizeof(pszGatewayBuf),iRet))
     {
        (void)sscanf_s(pszGatewayBuf,"%s",pszGateway,sizeof(pszGateway));
     }
     trim(pszGateway);
-    
+
     /*if strlen(pszGateway) < 1, then 0*/
     if(strlen(pszGateway) < 1)
-    {      
+    {
        pszGateway[0]='0';
        pszGateway[1]='\0';
     }
@@ -471,7 +502,12 @@ int GetIpv6VifGateway(int skt, const char *ifname)
     {
         return ERROR;
     }
-    
+
+    if(SUCC != CheckName(ifname))
+    {
+        return ERROR;
+    }
+
     (void)memset_s(pathBuf, MAX_NICINFO_LENGTH, 0, MAX_NICINFO_LENGTH);
      /*exec shell command to get ipv6 route gataway info*/
     (void)snprintf_s(pathBuf, MAX_NICINFO_LENGTH, MAX_NICINFO_LENGTH,
@@ -479,18 +515,18 @@ int GetIpv6VifGateway(int skt, const char *ifname)
     iRet = openPipe(pathBuf, "r");
     if (NULL == iRet)
     {
-       INFO_LOG("Failed to exec route shell command.");
+       INFO_LOG("Failed to execute route shell command, pathBuf=%s.", pathBuf);
        gtNicIpv6Info.info[gtNicIpv6Info.count].gateway[0] = '\0';
        return ERROR;
     }
-    
-     /*save default gw*/
+
+    /*save default gw*/
     if(NULL != fgets(pszGatewayBuf,sizeof(pszGatewayBuf),iRet))
     {
        (void)sscanf_s(pszGatewayBuf,"%s",pszGateway,sizeof(pszGateway));
     }
     trim(pszGateway);
-    
+
     /*if strlen(pszGateway) < 1, then 0*/
     if(strlen(pszGateway) < 1)
     {
@@ -517,7 +553,7 @@ int GetIpv4VifIp(int skt, int num, char *ifname)
 
     if (getifaddrs(&ifaddr) == -1)
     {
-        ERR_LOG("call getifaddrs failed\n");
+        ERR_LOG("Call getifaddrs failed, errno=%d", errno);
         return ERROR;
     }
 
@@ -531,7 +567,7 @@ int GetIpv4VifIp(int skt, int num, char *ifname)
         ret = getnameinfo(ifa->ifa_addr,sizeof(struct sockaddr_in),address, IPV6_ADDR_LEN, NULL, 0, NI_NUMERICHOST);
         if (0 != ret)
         {
-            ERR_LOG("call getnameinfo for nic %s failed: %s\n", ifname, gai_strerror(ret));
+            ERR_LOG("Call getnameinfo for nic %s failed: %s.", ifname, gai_strerror(ret));
             continue;
         }
 
@@ -595,7 +631,7 @@ int Inet6Rresolve(char *name, struct sockaddr_in6 *sin6, int numeric)
     s = getnameinfo((struct sockaddr *) sin6, sizeof(struct sockaddr_in6),name, 255 , NULL, 0, 0);
     if (s) 
     {
-        DEBUG_LOG("getnameinfo failed\n");
+        DEBUG_LOG("getnameinfo failed, name=%s, s=%s", name, s);
         return -1;
     }
     
@@ -634,7 +670,7 @@ int Inet6Resolve(char *name, struct sockaddr_in6 *sin6)
     
     if ((s = getaddrinfo(name, NULL, &req, &ai)))
     {
-        INFO_LOG("getaddrinfo: %s: %d\n", name, s);
+        INFO_LOG("getaddrinfo: %s: %d", name, s);
         return -1;
     }
     
@@ -690,7 +726,7 @@ int GetIpv6VifIp(int skt,int num, char *vifname)
 	
    if(NULL == (file = opendevfile(path)))
    {
-        DEBUG_LOG("GetIpv6VifInfo:failed to open /proc/net/if_inet6.");
+        DEBUG_LOG("Failed to open /proc/net/if_inet6.");
         return ERROR;
    }
 
@@ -778,7 +814,7 @@ int GetIpv6Info()
     skt = openNetSocket(); 
     if (ERROR == skt)
     {
-        DEBUG_LOG("GetIpv6Info:failed to openNetSocket.");
+        DEBUG_LOG("Failed to openNetSocket.");
         return ERROR;
     }
     memset_s(&gtNicIpv6Info, sizeof(gtNicIpv6Info), 0, sizeof(gtNicIpv6Info)); 
@@ -843,7 +879,7 @@ int GetIpv6Info()
    if(NULL == (file = opendevfile(path)))
     {
         NetworkDestroy(skt);
-        DEBUG_LOG("GetVifInfo:failed to open /proc/net/dev.");
+        DEBUG_LOG("Failed to open /proc/net/dev.");
         return ERROR;
     }
     
@@ -999,7 +1035,7 @@ void NetinfoNetworkctlmon(void *handle)
    if (ERROR == num)
    {
         write_to_xenstore(handle, IPV6_VIF_DATA_PATH, "error");
-        DEBUG_LOG("GetIpv6VifInfo:num is ERROR.");
+        DEBUG_LOG("Num is ERROR.");
         return;
    }
    

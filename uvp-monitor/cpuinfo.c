@@ -345,7 +345,7 @@ int CpuTimeWaitPercentage(char *cputimevalue)
     static CPU_t cpus;
     if (!(fp = OpenStatFile()))
     {
-       DEBUG_LOG("Failed open /proc/stat.");
+       DEBUG_LOG("Failed open /proc/stat, errno=%d.", errno);
        return ERROR;
     }
     if (!fgets(buf, sizeof(buf), fp))

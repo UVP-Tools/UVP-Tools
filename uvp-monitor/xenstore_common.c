@@ -65,7 +65,7 @@ void write_to_xenstore (void *handle, char *path, char *buf)
     fd_aft = get_fd_from_handle(head);
     if (!err)
     {
-        ERR_LOG("write %s %s failed, errno is %d, fd_pre is %d, fd_aft is %d",
+        ERR_LOG("Write %s %s failed, errno is %d, fd_pre is %d, fd_aft is %d.", \
                 path, buf, errno, fd_pre, fd_aft);
     }
     else
@@ -108,7 +108,7 @@ void write_weak_to_xenstore (void *handle, char *path, char *buf)
     if(ret != 1)
     {
         fd_aft = get_fd_from_handle(head);
-        ERR_LOG("write %s %s failed, errno is %d, fd_pre is %d, fd_aft is %d",
+        ERR_LOG("Write %s %s failed, errno is %d, fd_pre is %d, fd_aft is %d.", \
                 path, buf, errno, fd_pre, fd_aft);
         return;
     }
@@ -141,14 +141,14 @@ char *read_from_xenstore (void *handle, char *path)
     fd_aft = get_fd_from_handle(head);
     if(buf == NULL && (errno != 2))
     {
-        ERR_LOG("read %s failed, errno is %d, fd_pre is %d, fd_aft is %d",
+        ERR_LOG("Read %s failed, errno is %d, fd_pre is %d, fd_aft is %d.", \
                 path, errno, fd_pre, fd_aft);
         if(fd_aft < 0)
         {
             exit(1);
         }
     }
-//   else
+
     return buf;
 }
 
@@ -190,7 +190,7 @@ void *openxenstore(void)
         fd = get_fd_from_handle(h);
         flag = fcntl(fd, F_GETFD);
         if (fcntl(fd, F_SETFD, flag | FD_CLOEXEC) == -1) {
-            ERR_LOG("set FD_CLOEXEC failed! errno[%d]\n", errno);
+            ERR_LOG("Set FD_CLOEXEC failed! errno[%d].", errno);
         }
     }
     return h;

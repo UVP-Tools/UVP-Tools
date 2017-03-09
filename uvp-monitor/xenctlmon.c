@@ -39,10 +39,16 @@
 #include <linux/fs.h>
 #include <sys/utsname.h>
 #include "securec.h"
-#include "check_kernel.h"
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include "uvpmon.h"
+#include <sys/time.h>
+#include <time.h>
+#include <syslog.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <stdarg.h>
+#include <errno.h>
 
 #ifdef FIFREEZE
 #undef FIFREEZE
@@ -71,13 +77,14 @@
 /*驱动resume完成的标志位*/
 #define DRIVER_RESUME_FLAG "control/uvp/driver-resume-flag"
 #define SYNC_TIME_FLAG "control/uvp/clock/mode"
-#define CHR_DEV_NAME "/proc/xen_hcall"
 #define TIME_BUFFER 100
 /*VSA*/
 #define PYTHON_PATH  "/opt/galax/vsa/vsaApi/vsa/service/router/service/allintaprping.py"
 #define EXEC_PYTHON_PATH  "python /opt/galax/vsa/vsaApi/vsa/service/router/service/allintaprping.py &"
 /*Nanoseconds*/
-#define NANOSEC 1000000000
+#define NANOTOMICRO  1000000
+#define MICROTOSEC   1000
+#define MILLITOMICRO 1000
 #define TIME_DIFF 1
 
 bool   hibernate_migrate_flag = 0;
@@ -104,18 +111,19 @@ bool   hibernate_migrate_flag = 0;
 //新libvirt 对应的 ipv6 特征键值
 #define NETINFO_FEATURE_PATH  "control/uvp/netinfo_feature"
 
-#define BUFFER_SIZE 1024
-#define SHELL_BUFFER 256
-#define MAX_COMMAND_LENGTH 128
-#define VER_SIZE    16
-#define DEFAULT_VERSION "error"
-#define DEFAULT_PATH  "/etc/.uvp-monitor/version.ini"
+#define BUFFER_SIZE             1024
+#define SHELL_BUFFER            256
+#define MAX_COMMAND_LENGTH      128
+#define VER_SIZE                16
+#define LOG_LEVEL_SIZE          8
+#define DEFAULT_VERSION         "error"
+#define DEFAULT_PATH            "/etc/.uvp-monitor/version.ini"
 
 #define UVP_UPGRADE_RESULT_PATH "control/uvp/upgrade/result"
-#define UVP_UPGRADE_FLAG_PATH "control/uvp/upgrade_flag"
+#define UVP_UPGRADE_FLAG_PATH   "control/uvp/upgrade_flag"
 
 /* 一致性快照 */
-#define STORAGE_SNAPSHOT_FLAG  "control/uvp/storage_snapshot_flag"
+#define STORAGE_SNAPSHOT_FLAG   "control/uvp/storage_snapshot_flag"
 #define IOMIRROR_SNAPSHOT_FLAG  "control/uvp/iomirror_snapshot_flag"
 #define THAW "thaw"
 #define FREEZE "freeze"
@@ -183,6 +191,72 @@ pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 char fReboot = '0';
 
+void sys_log(const char* process, int Level, const char *func, int line, const char *format, ...)
+{
+    va_list ap;
+    char tmpBuf[SHELL_BUFFER] = {0};
+    char Log[BUFFER_SIZE] = {0};
+    char szLevel[LOG_LEVEL_SIZE] = {0};
+    int ltz = 0;
+    int utz = 0;
+    int timezone = 0;
+    struct timeval tv = {0};
+    struct tm *tm = NULL;
+    struct tm *tm1 = NULL;
+    time_t tt = {0};
+
+    gettimeofday(&tv, NULL);
+    tt = tv.tv_sec;
+    tm1 = gmtime(&tt);
+    utz= tm1->tm_hour;
+    tm = localtime(&tt);
+    ltz= tm->tm_hour;
+    timezone=ltz-utz;
+    if (timezone < -12)
+    {
+        timezone += 24;
+    }
+    else if (timezone >= 12)
+    {
+        timezone -= 24;
+    }
+
+    switch(Level)
+    {
+        case LOG_DEBUG:
+        {
+            strcpy_s(szLevel, LOG_LEVEL_SIZE, "debug");
+            break;
+        }
+        case LOG_INFO:
+        {
+            strcpy_s(szLevel, LOG_LEVEL_SIZE, "info");
+            break;
+        }
+        case LOG_ERR:
+        {
+            strcpy_s(szLevel, LOG_LEVEL_SIZE, "err");
+            break;
+        }
+        default:
+        {
+            strcpy_s(szLevel, LOG_LEVEL_SIZE, "debug");
+            break;
+        }
+    }
+
+    snprintf_s(tmpBuf, SHELL_BUFFER, SHELL_BUFFER,
+        "%d-%02d-%02dT%02d:%02d:%02d.%ld%+03d:00|%s|%s[%d]|%s[%d]|:",
+        1900+tm->tm_year, tm->tm_mon+1, tm->tm_mday,
+        tm->tm_hour, tm->tm_min, tm->tm_sec, tv.tv_usec,
+        timezone, szLevel, process, getpid(), func, line);
+
+    va_start(ap, format);
+    vsprintf_s(Log, BUFFER_SIZE, format, ap);
+    syslog(Level, "%s %s", tmpBuf, Log);
+    va_end(ap);
+}
+
 /*****************************************************************************
  Function   : write_vrm_flag
  Description:  note vm is vrm
@@ -197,7 +271,7 @@ void write_vrm_flag(void *phandle)
     }
 
     if((0 == access(VRM_VERSION, R_OK)) && (0 == access(SUSE_VERSION, R_OK))) {
-        INFO_LOG("This is VRM.\n");
+        INFO_LOG("This is VRM.");
         write_to_xenstore(phandle, VRM_FLAG, "true");
     }
 }
@@ -213,38 +287,37 @@ void set_guest_feature(void *handle)
     if(0 != access("/etc/.uvp-monitor/GuestOSFeature", R_OK)
         || 0 != access("/etc/.uvp-monitor/CurrentOS", R_OK))
     {
-        ERR_LOG("Get Guest Feature, Can't read cfg files\n");
+        ERR_LOG("Get Guest Feature, Can't read cfg files, errno=%d", errno);
         return;
     }
 
     ret = uvpPopen(get_cfg_cmd, feature_str, SHELL_BUFFER);
     if(0 != ret)
     {
-        ERR_LOG("Failed to call uvpPopen 1, ret = %s.\n", feature_str);
+        ERR_LOG("Failed to call uvpPopen 1, output=%s ret=%d.", feature_str, ret);
         return;
     }
     //Get name form CurrentOS error,maybe "NULL"
     if(0 == strlen(feature_str))
     {
-        INFO_LOG("uvp-monitor: Get name form cfg error(%s)\n", feature_str);
+        INFO_LOG("Get name form cfg error.");
         return;
     }
 
     ret = uvpPopen(get_feature_cmd, feature_str, SHELL_BUFFER);
     if (0 != ret)
     {
-        ERR_LOG("Failed to call uvpPopen 2, ret = %d.\n", ret);
+        ERR_LOG("Failed to call uvpPopen 2, output=%s ret=%d.", feature_str, ret);
         return;
     }
     //grep from GuestOSFeature maybe NULL
     if (0 == strlen(feature_str))
     {
-        INFO_LOG("uvp-monitor: Get Guest Feature Failed.\n");
-        //write_to_xenstore(handle, GUSET_OS_FEATURE, "0");
+        INFO_LOG("Get guest feature failed.");
     }
     else
     {
-		INFO_LOG("uvp-monitor: Guest Feature is %s.\n", feature_str);
+		INFO_LOG("Guest feature is %s.", feature_str);
         write_to_xenstore(handle, GUSET_OS_FEATURE, trim(feature_str));
     }
     return;
@@ -272,7 +345,7 @@ void SetPvDriverVer(void *handle)
     pFileVer = fopen(DEFAULT_PATH, "r");
     if (NULL == pFileVer)
     {
-        DEBUG_LOG("open /etc/.uvp-monitor/version.ini R_ERROR");
+        DEBUG_LOG("Open /etc/.uvp-monitor/version.ini failed, errno=%d.", errno);
         write_to_xenstore(handle, PVDRIVER_VERSION, DEFAULT_VERSION);
         return;
     }
@@ -335,9 +408,9 @@ void deal_hib_migrate_flag_file(int hib_mig_flag)
 
     iRet = uvpPopen(pszCommand, pszBuff, MAX_COMMAND_LENGTH);
     if (0 != iRet) {
-        ERR_LOG("hibernate_migrate_start: write migrate_start flag fail. ret = %d\n",iRet);
+        ERR_LOG("hibernate_migrate_start: write migrate_start flag fail. pszCommand=%s output=%s ret=%d.", pszCommand, pszBuff, iRet);
     } else {
-        ERR_LOG("write migrate_start flag %d success.\n",hib_mig_flag);
+        ERR_LOG("write migrate_start flag %d success.", hib_mig_flag);
     }
 
     return;
@@ -362,7 +435,7 @@ void write_to_file()
     fo = fopen(filename, "w+");
     if (NULL == fo)
     {
-        ERR_LOG("fopen failed, errno(%d)\n", errno);
+        ERR_LOG("fopen failed, errno=%d.", errno);
         return;
     }
     fprintf(fo, "%s\n", str);
@@ -425,7 +498,7 @@ void set_tools_version(void *handle)
         fver = fopen(pathBuf, "r");
         if (NULL == fver)
         {
-            DEBUG_LOG("open version file R_ERROR");
+            DEBUG_LOG("Open version file failed, errno=%d.", errno);
             continue;
         }
         (void)memset_s(versionBuf, SHELL_BUFFER, 0, SHELL_BUFFER);
@@ -856,7 +929,7 @@ void IsSupportStorageSnapshotcheck (void *handle)
 
     if (uname(&buf) < 0)
     {
-        ERR_LOG("get os release failed!\n");
+        ERR_LOG("Get os release failed, errno=%d.", errno);
         return;
     }
     /* 判断是否操作系统是否为Novell SUSE Linux Enterprise Server 11 SP1或
@@ -890,7 +963,8 @@ void *timing_monitor(void *handle)
     xb_write_first_flag = 0;
     do_watch_functions(handle);
 
-    if(0 == access("/proc/xen/version", R_OK) || 0 == access("/proc/xen_version", R_OK))
+    if(0 == access("/proc/xen/version",R_OK) || 0 == access("/proc/xen_version", R_OK)
+      || 0 == access("/dev/xen/xenbus", R_OK))
     {
         /*upgrade from V1,procfs do not provide weakwrite function before vm reboot*/
         UpgradeOldVerFile = fopen(FILE_OLD_VERSION,"r");
@@ -907,7 +981,7 @@ void *timing_monitor(void *handle)
         else
         {
             xb_write_first_flag = 1;
-            DEBUG_LOG("PVOPS has weakwrite function");
+	      	DEBUG_LOG("PVOPS has weakwrite function.");
         }
     }
     else
@@ -916,12 +990,12 @@ void *timing_monitor(void *handle)
         if((NULL != xenversionflag))
         {
             free(xenversionflag);
-            DEBUG_LOG("Xen Is R2/R3 Version");
+            DEBUG_LOG("Xen is R2/R3 version.");
             xb_write_first_flag = 1;
         }
         else
         {
-            DEBUG_LOG("Xen Is C03/C02 Version");
+            DEBUG_LOG("Xen is C03/C02 version.");
         }
     }
 
@@ -935,7 +1009,8 @@ void *timing_monitor(void *handle)
     /* 正在运行状态标志位*/
     write_vmstate_flag(handle, "running");
     /* 写入 PV OPS 内核标志位 */
-    if ( ! access("/proc/xen/version", R_OK) || ! access("/proc/xen_version", R_OK))
+    if ( ! access("/proc/xen/version", R_OK) || ! access("/proc/xen_version", R_OK)
+       || ! access("/dev/xen/xenbus", R_OK))
     {
         write_pvops_flag(handle, "1");
     }
@@ -999,7 +1074,7 @@ static int build_fs_mount_list(FsMountList *mounts)
     fp = setmntent(mtab, "r");
     if (!fp)
     {
-        ERR_LOG("uable to read mtab\n");
+        ERR_LOG("Unable to read mtab, errno=%d.", errno);
         return ERROR;
     }
 
@@ -1020,7 +1095,7 @@ static int build_fs_mount_list(FsMountList *mounts)
                 mount = (FsMount *)malloc(sizeof(FsMount));
                 if (NULL == mount)
                 {
-                    ERR_LOG("malloc failed.\n");
+                    ERR_LOG("Malloc failed.");
                     (void)endmntent(fp);
                     return ERROR;
                 }
@@ -1051,12 +1126,12 @@ static int execute_fsfreeze_shell(const char *state)
     char cmd[SHELL_BUFFER] = {0};
     int ret = 0;
 
-    INFO_LOG("enter execute_fsfreeze_shell.\n");
+    INFO_LOG("Enter execute_fsfreeze_shell.");
 
     /* 判断用户脚本是否存在 */
     if (access(SHELL_PATH, F_OK) != 0)
     {
-        INFO_LOG("no usr shell.\n");
+        INFO_LOG("No usr shell, errno=%d.", errno);
         return SUCC;
     }
 
@@ -1066,11 +1141,11 @@ static int execute_fsfreeze_shell(const char *state)
     ret = uvpPopen(cmd, buf, SHELL_BUFFER);
     if (0 != ret)
     {
-        (void)ERR_LOG(" execute fsfreeze shell fail, ret = %d.\n", ret);
+        (void)ERR_LOG("Execute fsfreeze shell failed, cmd=%s, output=%s ret = %d.", cmd, buf, ret);
         return ERROR;
     }
 
-    INFO_LOG("leave execute_fsfreeze_shell success.\n");
+    INFO_LOG("Leave execute_fsfreeze_shell success.");
     return SUCC;
 }
 
@@ -1092,7 +1167,7 @@ static int guest_cache_thaw(FsMountList *mounts)
         fd = open(mount->dirname, O_RDONLY);
         if (fd == -1)
         {
-            ERR_LOG("open file error\n");
+            ERR_LOG("Open file error, errno=%d", errno);
             continue;
         }
 
@@ -1107,7 +1182,7 @@ static int guest_cache_thaw(FsMountList *mounts)
         close(fd);
         if (10 == i && 0 != ret)
         {
-            ERR_LOG("ioctl [FITHAW] error, mount name is %s\n", mount->dirname);
+            ERR_LOG("Ioctl [FITHAW] error, mount name is %s, errno=%d", mount->dirname, errno);
             goto out;
         }
     }
@@ -1115,7 +1190,7 @@ static int guest_cache_thaw(FsMountList *mounts)
 out:
     if (execute_fsfreeze_shell(THAW) < 0)
     {
-        ERR_LOG("guest_fsfreeze_shell thaw failed\n");
+        ERR_LOG("guest_fsfreeze_shell thaw failed");
         return ERROR;
     }
     if (0 != ret)
@@ -1141,13 +1216,13 @@ static int guest_cache_freeze(FsMountList *mounts)
     /* 执行用户脚本(刷数据库缓存，冻结数据库IO)*/
     if (execute_fsfreeze_shell(FREEZE) < 0)
     {
-        ERR_LOG("execute_fsfreeze_shell freeze failed.\n");
+        ERR_LOG("execute_fsfreeze_shell freeze failed.");
     }
 
     /* 遍历mount点,将符合条件的放进链表中 */
     if (build_fs_mount_list(mounts) < 0)
     {
-        ERR_LOG("build_fs_mount_list fail.\n");
+        ERR_LOG("build_fs_mount_list failed.");
         goto error;
     }
 
@@ -1157,14 +1232,14 @@ static int guest_cache_freeze(FsMountList *mounts)
         fd = open(mount->dirname, O_RDONLY);
         if (-1 == fd)
         {
-            ERR_LOG("open file error.\n");
+            ERR_LOG("Open file error, dirname=%s, errno=%d.", mount->dirname, errno);
             goto error;
         }
         /* 冻结文件系统 */
         if (ioctl(fd, FIFREEZE) < 0)
         {
             close(fd);
-            ERR_LOG("ioctl [FIFREEZE] error.\n");
+            ERR_LOG("Ioctl [FIFREEZE] error, errno=%d.", errno);
             goto error;
 
         }
@@ -1198,12 +1273,12 @@ int do_cache_thaw(void *handle, FsMountList *mounts)
         if (guest_cache_thaw(mounts) < 0)
         {
             ret = -1;
-            ERR_LOG("guest_cache_thaw fail!\n");
+            ERR_LOG("guest_cache_thaw failed!");
             write_to_xenstore(handle, IOMIRROR_SNAPSHOT_FLAG, "-1");
         }
         else
         {
-            INFO_LOG("guest cache thaw success!\n");
+            INFO_LOG("Guest cache thaw success!");
             write_to_xenstore(handle, IOMIRROR_SNAPSHOT_FLAG, "0");
             write_to_xenstore(handle, STORAGE_SNAPSHOT_FLAG, "0");
         }
@@ -1265,7 +1340,7 @@ int wait_for_thaw(void *handle, FsMountList *mounts)
     arg = (struct Freezearg *)malloc(sizeof(struct Freezearg));
     if(arg == NULL)
     {
-        ERR_LOG("malloc failed.\n");
+        ERR_LOG("Malloc failed.");
         return -1;
     }
     pthread_attr_init (&attr);
@@ -1277,7 +1352,7 @@ int wait_for_thaw(void *handle, FsMountList *mounts)
     if (strcmp(strerror(thread), "Success") != 0)
     {
         ret = -1;
-        DEBUG_LOG("Create do_time_thaw fail, errorno = %d", thread);
+        DEBUG_LOG("Create do_time_thaw fail, thread=%d.", thread);
         free(arg);
     }
 
@@ -1352,7 +1427,7 @@ int create_write_heartbeat_thread(void *handle)
          ret = -1;
         (void)memset_s(logbuf, LOG_BUF_LEN, 0, LOG_BUF_LEN);
         (void)snprintf_s(logbuf, LOG_BUF_LEN, LOG_BUF_LEN, "Create write_heartbeat, errorno = %d !", thread);
-        INFO_LOG("%s",  logbuf);
+        INFO_LOG("logbuf=%s", logbuf);
     }
     (void)pthread_attr_destroy (&attr);
     return ret;
@@ -1421,25 +1496,26 @@ void do_complete_restore_watch(void *handle)
     if((NULL != migratestate) && \
             ((0 == strcmp(migratestate, "1")) || (0 == strcmp(migratestate, "2"))))
     {
-        if ( ! access("/proc/xen/version", R_OK) || ! access("/proc/xen_version", R_OK))
+        if ( ! access("/proc/xen/version", R_OK) || ! access("/proc/xen_version", R_OK)
+           || ! access("/dev/xen/xenbus", R_OK))
         {
             SetScsiFeature(handle);
             write_pvops_flag(handle, "1");
             write_service_flag(handle, "true");
             write_vmstate_flag(handle, "running");
             write_feature_flag(handle, "1");
-            
-            INFO_LOG("modify_swappiness.sh restore in PVOPS GuestOS\n");
-            (void)system("sh /etc/.uvp-monitor/modify_swappiness.sh restore 2>/dev/null");
+
+            INFO_LOG("modify_swappiness_after_blkfront.sh restore in PVOPS GuestOS");
+            (void)system("sh /etc/.uvp-monitor/modify_swappiness_after_blkfront.sh restore 2>/dev/null");
         }
         write_vrm_flag(handle);
-        INFO_LOG("complate restore, send ndp\n");
+        INFO_LOG("Complate restore, send ndp");
         (void)system("sh /etc/init.d/xenvnet-arp 2>/dev/null");
         write_to_file();
         //add xenstore key after migrate
 #ifdef NOT_USE_PV_UPGRADE
         write_to_xenstore(handle, XS_NOT_USE_PV_UPGRADE, "true");
-        INFO_LOG("Do not provide UVP Tools upgrade ability.\n");
+        INFO_LOG("Do not provide UVP Tools upgrade ability.");
 #endif
         (void)write_to_xenstore(handle, CMD_RESULT_XS_PATH, chret);
         if(strlen(feature_str) > 0)
@@ -1457,7 +1533,7 @@ void do_complete_restore_watch(void *handle)
             }
             else
             {
-                INFO_LOG("Failed to call uvpPopen hibernate_migrate_flag, ret = %d.\n", ret);
+                INFO_LOG("Failed to call uvpPopen hibernate_migrate_flag, ret=%d.", ret);
             }
         }
 
@@ -1477,7 +1553,8 @@ void do_complete_restore_watch(void *handle)
     
     if((NULL != migratestate) && ((0 == strcmp(migratestate, "3")) ))
     {
-        if ( ! access("/proc/xen/version", R_OK) || ! access("/proc/xen_version", R_OK) )
+        if ( ! access("/proc/xen/version", R_OK) || ! access("/proc/xen_version", R_OK)
+           || ! access("/dev/xen/xenbus", R_OK) )
         {
             write_service_flag(handle, "true");
         }
@@ -1556,7 +1633,7 @@ void do_driver_resume_watch(void *handle)
     driver_resume = read_from_xenstore(handle, pszCommand);
     if((NULL != driver_resume) && (0 == strcmp(driver_resume, "1")))
     {
-        INFO_LOG("driver resume, send ndp\n");
+        INFO_LOG("Driver resume, send ndp.");
         (void)system("sh /etc/init.d/xenvnet-arp 2>/dev/null");
     }
     if(NULL != driver_resume)
@@ -1581,7 +1658,7 @@ static int uvpexecl(const char* pszCmd)
 
     if (0 > cpid)
     {
-        ERR_LOG("failed to create subprocess.\n");
+        ERR_LOG("Failed to create subprocess, errno=%d.", errno);
         return ERROR_FORK;
     }
     else if (0 == cpid)
@@ -1625,7 +1702,7 @@ void *do_guestcmd_watch(void *handle)
     /* 键值不为空时执行 */
     if( NULL == guest_cmd )
     {
-        ERR_LOG("read_from_xenstore error, guest_cmd is NULL\n");
+        ERR_LOG("read_from_xenstore error, guest_cmd is NULL.");
         return NULL;
     }
     if( !strcmp(guest_cmd, " "))
@@ -1646,15 +1723,15 @@ void *do_guestcmd_watch(void *handle)
     {
         (void)snprintf_s(pszCommand, BUFFER_SIZE, BUFFER_SIZE, "%s %s/%s %s", 
                         pchCmdType, GUEST_CMD_FILE_PATH, pchFileName, pchPara);
-        ERR_LOG("file name is %s.\n", pchFileName);
+        ERR_LOG("chCmdStr is %s, pszCommand is %s.", chCmdStr, pszCommand);
         iRet = uvpexecl(pszCommand);
         if (0 != iRet)
         {
-            ERR_LOG("call uvpPopen pszCommand Fail ret = %d\n", iRet);
+            ERR_LOG("Call uvpexecl pszCommand failed ret = %d.", iRet);
             if (1 == iRet)
             {
                 iRet = UNEXPECTED_ERROR;
-                ERR_LOG("change error code 1 to 10, iRet = %d\n", iRet);
+                ERR_LOG("Change error code 1 to 10.");
             }
         }
         (void)memset_s(chret, CMD_RESULT_BUF_LEN, 0, CMD_RESULT_BUF_LEN);
@@ -1700,7 +1777,8 @@ int CheckArg(char* chCmdStr, char** pchCmdType, char** pchFileName,
     if (NULL == *pchCmdType || NULL == *pchFileName 
         || NULL == *pchPara || NULL == pchCheck)
     {
-        ERR_LOG("the cmd type is null\n");
+        ERR_LOG("pchCmdType=%p, pchFileName=%p, pchPara=%p, pchCheck=%p.", \
+            *pchCmdType, *pchFileName, *pchPara, pchCheck);
         return ARG_ERROR;
     }
 
@@ -1709,7 +1787,7 @@ int CheckArg(char* chCmdStr, char** pchCmdType, char** pchFileName,
         || strstr(*pchFileName, "|") || strstr(*pchFileName, ";") || strstr(*pchFileName, "$") 
         || strstr(*pchFileName, " ") || strstr(*pchFileName, "`") || strstr(*pchFileName, "\n"))
     {
-        ERR_LOG("check the file name error\n");
+        ERR_LOG("Check the file name error, pchFileName=%s.", *pchFileName);
         return ARG_ERROR;
     }
     if(strstr(*pchPara, "<") ||strstr(*pchPara, ">") || strstr(*pchPara, "\\") || strstr(*pchPara, "/") 
@@ -1717,7 +1795,7 @@ int CheckArg(char* chCmdStr, char** pchCmdType, char** pchFileName,
         || strstr(*pchPara, "?") || strstr(*pchPara, ",") || strstr(*pchPara, "*") || strstr(*pchPara, "{") 
         || strstr(*pchPara, "}") || strstr(*pchPara, "`") || strstr(*pchPara, "\n"))
     {
-        ERR_LOG("check the parameters error\n");
+        ERR_LOG("Check the parameters error, pchPara=%s.", *pchPara);
         return ARG_ERROR;
     }
 
@@ -1725,7 +1803,7 @@ int CheckArg(char* chCmdStr, char** pchCmdType, char** pchFileName,
     {
         if(!strstr(*pchFileName, ".sh"))
         {
-            ERR_LOG("the cmd type sh and filename is not match\n");
+            ERR_LOG("The cmd type sh and filename is not match, pchFileName=%s.", *pchFileName);
             return ARG_ERROR;
         }
     }
@@ -1733,7 +1811,7 @@ int CheckArg(char* chCmdStr, char** pchCmdType, char** pchFileName,
     {
         if(!strstr(*pchFileName, ".py"))
         {
-            ERR_LOG("the cmd type python and filename is not match\n");
+            ERR_LOG("The cmd type python and filename is not match, pchFileName=%s.", *pchFileName);
             return ARG_ERROR;
         }
     }
@@ -1741,20 +1819,20 @@ int CheckArg(char* chCmdStr, char** pchCmdType, char** pchFileName,
     {
         if(!strstr(*pchFileName, ".pl"))
         {
-            ERR_LOG("the cmd type perl and filename is not match\n");
+            ERR_LOG("The cmd type perl and filename is not match, pchFileName=%s.", *pchFileName);
             return ARG_ERROR;
         }
     }
     else
     {
-        ERR_LOG("the cmd type is Invalid\n");
+        ERR_LOG("The cmd type is Invalid, pchCmdType=%s.", *pchCmdType);
         return ARG_ERROR;
     }
 
     (void)snprintf_s(FullFileName, BUFFER_SIZE, BUFFER_SIZE, "%s/%s", GUEST_CMD_FILE_PATH, *pchFileName);
     if(access(FullFileName, F_OK))
     {
-        ERR_LOG("the file not exist\n");
+        ERR_LOG("The file not exist, FullFileName=%s.", FullFileName);
         return FILENAME_ERROR;
     }
     
@@ -1762,19 +1840,19 @@ int CheckArg(char* chCmdStr, char** pchCmdType, char** pchFileName,
     iRet = uvpPopen(pszCommand, pszBuff, BUFFER_SIZE);
     if (0 != iRet)
     {
-        ERR_LOG("call uvpPopen pszCommand Fail ret = %d\n", iRet);
+        ERR_LOG("Call uvpPopen pszCommand failed, pszCommand=%s, pszBuff=%s, ret=%d.", pszCommand, pszBuff, iRet);
         return CHECKSUM_ERROR;
     }
 
     pCmd = strtok_s(pszBuff, " ", &outer_ptr);
     if(NULL == pCmd)
     {
-        ERR_LOG("strtok_s error\n");
+        ERR_LOG("strtok_s error, pszBuff=%s.", pszBuff);
         return CHECKSUM_ERROR;
     }
     if(strcmp(pchCheck, pCmd))
     {
-        ERR_LOG("Integrity check error\n");
+        ERR_LOG("Integrity check error, pchCheck=%s, pCmd=%s.", pchCheck, pCmd);
         return CHECKSUM_ERROR;
     }
     return ARG_CHECK_OK;
@@ -1933,13 +2011,13 @@ void do_watch_proc(void *handle)
                     write_to_xenstore(handle, IOMIRROR_SNAPSHOT_FLAG, "1");
                     if (guest_cache_freeze(&mounts) < 0)
                     {
-                        ERR_LOG("guest_cache_freeze fail!\n");
+                        ERR_LOG("guest_cache_freeze failed!");
                         write_to_xenstore(handle, IOMIRROR_SNAPSHOT_FLAG, "-1");
                         free_fs_mount_list(&mounts);
                     }
                     else
                     {
-                        INFO_LOG("guest_cache_freeze success!\n");
+                        INFO_LOG("guest_cache_freeze success!");
                         write_to_xenstore(handle, STORAGE_SNAPSHOT_FLAG, "2");
                         /* gfreezeflag=1 表示已经冻结 */
                         gfreezeflag = 1;
@@ -1970,7 +2048,7 @@ void do_watch_proc(void *handle)
                  if (strcmp(strerror(iThread), "Success") != 0)
                  {
                     pthread_attr_destroy (&attr);
-                    ERR_LOG("unplug disk thread create failed!");
+                    ERR_LOG("Unplug disk thread create failed!");
                  }
                  pthread_attr_destroy (&attr);
             }
@@ -1997,7 +2075,7 @@ void do_watch_proc(void *handle)
                 if (strcmp(strerror(iThread), "Success") != 0)
                 {
                    (void)pthread_attr_destroy (&attr);
-                   ERR_LOG("do guestcmd thread create failed!");
+                   ERR_LOG("Create guestcmd thread failed!");
                 }
                 (void)pthread_attr_destroy (&attr);
             }
@@ -2111,7 +2189,7 @@ void do_tools_watch_proc(void *handle)
         }
         if(g_monitor_restart_value == 1)
         {
-            INFO_LOG("[Monitor-Upgrade]:Condition upgrade pv unwatch");
+            INFO_LOG("Condition upgrade pv unwatch.");
             (void)xs_unwatch(handle, UVP_VERSION_INFO , "uvptoken");
             (void)xs_unwatch(handle, UVP_TIP_MESSAGE , "uvptoken");
             break;
@@ -2120,62 +2198,6 @@ void do_tools_watch_proc(void *handle)
     close(toolsxsfd);
     return ;
 
-}
-
-/*****************************************************************************
- * Function   : do_time_sync
- * Description: sync the vm time to Dom0
- * Input       :xenstore handle
- * Output     : None
- * Return     : None
- * *****************************************************************************/
-void *do_time_sync(void *handle)
-{
-    int ret = 0;
-    char ubuf[TIME_BUFFER] = {0};
-    unsigned long long dom0_number_time = 0;
-    unsigned long long vm_number_time = 0;
-    time_t target_time = 0;
-
-    int timefd = -1;
-    timefd = open(CHR_DEV_NAME, O_RDONLY);
-
-    while (SUCC == condition())
-    {
-	/*加固:防止uvp-monitor先于xen-hcall先加载*/
-	if(timefd < 0)
-	{
-        	(void)sleep(5);
-        	timefd = open(CHR_DEV_NAME, O_RDONLY);
-        	continue;
-	}
-	else
-    	{
-        	ret = read(timefd, ubuf, TIME_BUFFER);
-        	if (ret < 0)
-        	{
-                	printf("read %s error.", CHR_DEV_NAME);
-                	continue;
-        	}
-
-        	vm_number_time = time(NULL);
-
-        	dom0_number_time = strtoull(ubuf, NULL, 10);
-        	dom0_number_time /= NANOSEC;
-        	target_time = (time_t)dom0_number_time;
-
-        	if(labs(target_time - vm_number_time) > TIME_DIFF)
-        	{
-                	/*set the dom0 time to vm*/
-                	(void)stime(&target_time);
-        	}
-        	memset_s(ubuf, TIME_BUFFER, 0, TIME_BUFFER);
-        	(void)sleep(60);
-    	}
-    }
-
-    close(timefd);
-    return NULL;
 }
 
 /*****************************************************************************
@@ -2255,24 +2277,23 @@ void init_daemon()
     g_netinfo_value = 0;
     g_monitor_restart_value = 0;
 
-    check_compatible();
 again:
     /*建立管道*/
     iRet = pipe(pipes);
     if(iRet < 0){
-        ERR_LOG("pipe failed, errno is %d, just exit\n", errno);
+        ERR_LOG("Pipe failed, errno=%d, just exit.", errno);
         exit(1);
     }
     cpid = fork();
     DEBUG_LOG("Mlock uvp-monitor memory.");
     iRet = mlockall(MCL_CURRENT|MCL_FUTURE);
     if(iRet != 0){
-		 ERR_LOG("Mlock uvp-monitor memory failed, errno = %d.", errno);
+		 ERR_LOG("Mlock uvp-monitor memory failed, errno=%d.", errno);
     }
     /* fork失败，退出 */
     if(cpid < 0)
     {
-        DEBUG_LOG("Process fork cpid fail, errorno = %d", cpid);
+        DEBUG_LOG("Process fork cpid fail, cpid=%d.", cpid);
         exit(1);
     }
     /*做子进程的事*/
@@ -2304,37 +2325,17 @@ again:
 
 #ifdef NOT_USE_PV_UPGRADE
         write_to_xenstore(handle, XS_NOT_USE_PV_UPGRADE, "true");
-        INFO_LOG("Do not provide UVP Tools upgrade ability.\n");
+        INFO_LOG("Do not provide UVP Tools upgrade ability.");
 #else
         write_to_xenstore(handle, XS_NOT_USE_PV_UPGRADE, "false");
-        INFO_LOG("Provide UVP Tools upgrade ability.\n");
+        INFO_LOG("Provide UVP tools upgrade ability.");
 #endif
-
-        timeFlag = read_from_xenstore(handle, SYNC_TIME_FLAG);
-        if (NULL != timeFlag)
-        {
-            if (strcmp(timeFlag, "sync") == 0)
-            {
-                sThread = pthread_create(&sthread_id, &attr, do_time_sync, (void *)handle);
-                if (strcmp(strerror(sThread), "Success") != 0)
-                {
-                    DEBUG_LOG("Create do_time_sync fail, errorno = %d", sThread);
-                    pthread_attr_destroy (&attr);
-                    exit(1);
-                }
-
-            }
-            free(timeFlag);
-            //lint -save -e438
-            timeFlag = NULL;
-            //lint -restore
-        }
 
         //创建do_monitoring的线程
         iThread = pthread_create(&pthread_id, &attr, do_monitoring, (void *)handle);
         if (strcmp(strerror(iThread), "Success") != 0)
         {
-            DEBUG_LOG("Create do_monitoring fail, errorno = %d", iThread);
+            DEBUG_LOG("Create do_monitoring fail, iThread=%d.", iThread);
             pthread_attr_destroy (&attr);
             exit(1);
         }
@@ -2344,7 +2345,7 @@ again:
 
         if (strcmp(strerror(tThread), "Success") != 0)
         {
-            DEBUG_LOG("Create do_tools_monitoring fail, errorno = %d", tThread);
+            DEBUG_LOG("Create do_tools_monitoring fail, tThread=%d.", tThread);
             pthread_attr_destroy (&attr);
             exit(1);
         }
@@ -2353,11 +2354,11 @@ again:
         mThread = pthread_create(&mthread_id, &attr, timing_monitor, (void *)handle);
         if (strcmp(strerror(mThread), "Success") != 0)
         {
-            DEBUG_LOG("Create timing_monitor fail, try again. errorno = %d", mThread);
+            DEBUG_LOG("Create timing_monitor fail, try again. mThread=%d.", mThread);
             mThread = pthread_create(&mthread_id, &attr, timing_monitor, (void *)handle);
             if (strcmp(strerror(mThread), "Success") != 0)
             {
-                DEBUG_LOG("Create timing_monitor fail, process exit. errorno = %d", mThread);
+                DEBUG_LOG("Create timing_monitor fail, process exit. mThread=%d.", mThread);
                 pthread_attr_destroy (&attr);
                 exit(1);
             }
@@ -2369,13 +2370,13 @@ again:
 
         if(0 == iRet)
         {
-            ERR_LOG("the parent has dead, the uvp-monitor exits.\n");
+            ERR_LOG("The parent has dead, the uvp-monitor exits.");
             ReleaseEnvironment(handle);
             (void)kill(getpid(), SIGKILL);
         }
         if(g_monitor_restart_value == 1)
         {
-            ERR_LOG("upgrade pv free son process handle");
+            ERR_LOG("Upgrade pv free son process handle.");
             ReleaseEnvironment(handle);
         }
     }
@@ -2385,7 +2386,7 @@ again:
         handle = openxenstore();
         if (NULL == handle)
         {
-            ERR_LOG("open xenstore fd failed, just exit\n");
+            ERR_LOG("Open xenstore fd failed, just exit.");
             exit(1);
         }
             /*cpid为子进程PID*/
@@ -2395,10 +2396,10 @@ wait_again:
         {
             if(errno == EINTR)                                      //FIXME
             {
-                INFO_LOG("waitpid when caught a signal\n");
+                INFO_LOG("waitpid when caught a signal.");
                 goto wait_again;
             }
-            ERR_LOG("waitpid fail!, errno is %d\n", errno);
+            ERR_LOG("waitpid failed, errno=%d.", errno);
             ReleaseEnvironment(handle);
             exit(1);
         }
@@ -2408,10 +2409,10 @@ wait_again:
         close(pipes[1]);
         sleep(1);
         if (WIFEXITED(iStatus))
-            ERR_LOG("the uvp-monitor %d exits with status %d\n", wpid, WEXITSTATUS(iStatus));
+            ERR_LOG("The uvp-monitor %d exits with status %d.", wpid, WEXITSTATUS(iStatus));
         else
         {
-            ERR_LOG("the uvp-monitor %d exits with unknown reason, iStatus is %d\n", wpid, iStatus);
+            ERR_LOG("The uvp-monitor %d exits with unknown reason, iStatus is %d.", wpid, iStatus);
         }
         goto again;
     }

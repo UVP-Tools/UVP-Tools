@@ -40,9 +40,11 @@ extern "C" {
 
 #include <syslog.h>
 
-#define DEBUG_LOG(fmt, args...)                 syslog(LOG_DEBUG, fmt, ##args)
-#define INFO_LOG(fmt, args...)                  syslog(LOG_INFO, fmt, ##args)
-#define ERR_LOG(fmt, args...)                   syslog(LOG_ERR, "%s:%d:%s: " fmt, __FILE__, __LINE__, __func__, ##args)
+extern void sys_log(const char* process, int Level, const char *func, int line, const char *format, ...);
+
+#define DEBUG_LOG(fmt, args...)                sys_log("uvp-monitor", LOG_DEBUG, __func__, __LINE__, fmt, ##args)
+#define INFO_LOG(fmt, args...)                 sys_log("uvp-monitor", LOG_INFO, __func__, __LINE__, fmt, ##args)
+#define ERR_LOG(fmt, args...)                  sys_log("uvp-monitor", LOG_ERR, __func__, __LINE__, fmt, ##args)
 
 #define RELEASE_BOND "control/uvp/release_bond"
 #define REBOND_SRIOV "control/uvp/rebond_sriov"

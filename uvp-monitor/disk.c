@@ -37,6 +37,7 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <unistd.h>
+#include <stdlib.h>
 #include "securec.h"
 
 #define PROC_PARTITIONS             "/proc/partitions"
@@ -44,6 +45,7 @@
 #define PROC_MOUNTS                 "/proc/mounts"
 #define PROC_DEVICES                "/proc/devices"
 #define DISK_DATA_PATH              "control/uvp/disk"
+#define DISK_DATA_EXT_PATH          "control/uvp/disk-ext"
 #define FILE_DATA_PATH              "control/uvp/filesystem"
 /*xenstore支持4096个字节，超过这个限制后换这个键值再进行filesystem信息的填写*/
 #define FILE_DATA_EXTRA_PATH_PREFIX        "control/uvp/filesystem_extra"
@@ -52,21 +54,28 @@
 #define DEVPATH                     "/dev/disk/by-id/"
 #define CMPSTRING                   "../../"
 #define SCSI_DISK_PATH              "device/vscsi"
+/*must be equal with the value defined in uvpext*/
+#define MAX_ROWS 4
+#define MAX_XS_LENGTH 100
+/*每个xenstore键值所写的磁盘利用率个数*/
+#define MAX_DISKUSAGE_NUM_PER_KEY 30
+
 #define RAM_MAJOR                   1
 #define LOOP_MAJOR                  7
 #define MAX_DISKUSAGE_LEN           1024
 #define MAX_NAME_LEN                64
-#define MAX_STR_LEN                 1024
+#define MAX_STR_LEN                 4096
 #define UNIT_TRANSFER_CYCLE         1024
 #define MAX_DISK_NUMBER             128          /* TODO:1.现阶段支持11个xvda磁盘，17个scsi磁盘；以后支持的磁盘数增多后此处应相应增大. 
                                                          2. 为了支持60个磁盘，此值扩大为128*/
-#define MAX_PARTNAME_LEN            10
 /*支持50个规格的filesystem长度*/
 #define MAX_FILENAMES_SIZE          52800
 /*xenstore键值最大长度为4096，减去键值长度，剩下长度为filesystem可放的长度*/
 #define MAX_FILENAMES_XENSTORLEN    4042
 /*最多只上报60个磁盘的利用率信息*/
-#define MAX_DISKUSAGE_STRING_NUM    60
+#define MAX_DISKUSAGE_STRING_NUM 60
+#define SECTOR_SIZE 512
+#define MEGATOBYTE (1024 * 1024)
 /*FilenamesArr存放组装的文件系统名及使用率*/
 char FilenameArr[MAX_FILENAMES_SIZE] = {0};
 /* device-mapper对应的主设备号 */
@@ -105,6 +114,28 @@ struct NumberCount
     int diskNum;             /* 记录DeviceInfo个数 */
     int mountNum;            /* 记录DiskInfo个数 */
 };
+
+struct DmInfo
+{
+    int nParentMajor;
+    int nParentMinor;
+    long long nSectorNum;
+};
+
+enum dm_type
+{
+    DM_LINEAR = 0,
+    DM_STRIPED,
+    DM_CRYPT,
+    DM_RAID,
+    DM_MIRROR,
+    DM_SNAPSHOT,
+    DM_UNKNOWN
+};
+
+extern CheckName(const char * name);
+
+void write_xs_disk(struct xs_handle *handle, int is_weak, char xs_value[][MAX_DISKUSAGE_LEN], int row_num);
 
 /*****************************************************************************
  Function   : strAdd()
@@ -972,8 +1003,13 @@ int getDrbdParent(char *drbdName, char *parentName)
     char szLine[MAX_STR_LEN] = {0};
     char tmpParentName[MAX_NAME_LEN] = {0};
 
+    if(SUCC != CheckName(drbdName))
+    {
+        return ERROR;
+    }
+
     /* 根据当前drbd设备名，串联drbdsetup命令，获取父设备 */
-    (void)snprintf_s(szCmd, sizeof(szCmd), sizeof(szCmd), "drbdsetup %s show |grep /dev", drbdName);
+    (void)snprintf_s(szCmd, sizeof(szCmd), sizeof(szCmd), "drbdsetup \"%s$\" show |grep /dev", drbdName);
     fpDmCmd = openPipe(szCmd, "r");
     if (NULL == fpDmCmd)
     {
@@ -1338,102 +1374,6 @@ int getDiskNameFromPartName(const char *pPartName, char *pDiskName)
 }
 
 /*****************************************************************************
- Function   : getDmParentNode()
- Description: 根据文件系统设备号，获取该文件系统的父节点名
- Input      : struct DevMajorMinor* devMajorMinor       /proc/partitions中设备名及其主次设备号结构体数组
-              int partNum                               对应关系数据数量
-              int devID                                 文件系统设备号
- Output     : char* parentName                          父节点名
- Return     : SUCC = success, ERROR = failure
- Other      : N/A
- *****************************************************************************/
-int getDmParentNode(struct DevMajorMinor *devMajorMinor, int partNum, int devID, char *parentName)
-{
-    char szCmd[MAX_STR_LEN] = {0};
-    int nParentMajor = 0;
-    int nParentMinor = 0;
-    FILE *fpDmCmd;
-    char szLine[MAX_STR_LEN] = {0};
-    char szRealName[MAX_NAME_LEN] = {0};
-    int nParentDevID = 0;
-    /* 存储逻辑卷父设备数量 */
-    int nCount = 0;
-    int nFlag = 0;
-
-    char szDiskName[MAX_PARTNAME_LEN] = {0};
-    char szDiskNameTmp[MAX_PARTNAME_LEN] = {0};
-
-    /* 根据当前逻辑卷主次设备号，串联dmsetup命令，获取父设备主次设备号 */
-    (void)snprintf_s(szCmd, sizeof(szCmd), sizeof(szCmd), "dmsetup table -j %d -m %d", major(devID), minor(devID));
-    fpDmCmd = openPipe(szCmd, "r");
-    if (NULL == fpDmCmd)
-    {
-        return ERROR;
-    }
-
-    /* 循环读取命令执行结果的文件指针 */
-    while (fgets(szLine, sizeof(szLine), fpDmCmd))
-    {
-        /* 根据dmsetup命令结果，获取父设备的主次设备号 */
-        if (sscanf_s(szLine, "%*d %*d %*s %d:%d %*[^\n ]", &nParentMajor, &nParentMinor) != 2)
-         {
-             if(sscanf_s(szLine, "%*d %*d %*s %*s %*s %*d %d:%d %*[^\n ]", &nParentMajor, &nParentMinor) != 2)
-             {
-                 nFlag = ERROR;
-                 break;
-             }
-         }
-
-        /* 如果逻辑卷父设备还是逻辑卷，则直接返回ERROR(逻辑卷上创建逻辑卷的情况) */
-        if (g_deviceMapperNum == nParentMajor)
-        {
-            nFlag = ERROR;
-            break;
-        }
-        nParentDevID = makedev(nParentMajor, nParentMinor);
-        memset_s(szRealName, MAX_NAME_LEN, 0, MAX_NAME_LEN);
-        memset_s(szDiskName, MAX_PARTNAME_LEN, 0, MAX_PARTNAME_LEN);
-        (void)getInfoFromID(devMajorMinor, partNum, nParentDevID, szRealName, NULL);
-        if(ERROR == getDiskNameFromPartName(szRealName, szDiskName))
-        {
-            nFlag = ERROR;
-            break;
-        }
-        if(0 == nCount)
-        {
-            memset_s(szDiskNameTmp, MAX_PARTNAME_LEN, 0, MAX_PARTNAME_LEN);
-            (void)strncpy_s(szDiskNameTmp, MAX_PARTNAME_LEN, szDiskName, strlen(szDiskName));
-        }
-        else
-        {
-            /*如果szDiskNameTmp  和szDiskName不相等，说明LVM跨了多块磁盘*/
-            if (0 != strcmp(szDiskNameTmp, szDiskName))
-            {
-                nFlag = UNKNOWN;
-                break;
-            }
-            memset_s(szDiskNameTmp, MAX_PARTNAME_LEN, 0, MAX_PARTNAME_LEN);
-            (void)strncpy_s(szDiskNameTmp, MAX_PARTNAME_LEN, szDiskName, strlen(szDiskName));
-        }
-        nCount++;
-    }
-    (void)pclose(fpDmCmd);
-    //lint -save -e438
-    fpDmCmd = NULL;
-    //lint -restore
-
-    if (ERROR == nFlag)
-    {
-        return ERROR;
-    }
-
-    /* 将获取出来的父设备名传递给出参 */
-    (void)strncpy_s(parentName, strlen(szRealName)+1, szRealName, strlen(szRealName));
-
-    return SUCC;
-}
-
-/*****************************************************************************
  Function   : addDiskUsageToDevice()
  Description: 根据分区的真实名字，对比磁盘，如果信息一致，则累加使用空间信息至对应磁盘
  Input      : struct DeviceInfo* linuxDiskUsage       物理磁盘名称及其使用空间、总空间的结构体数组
@@ -1478,6 +1418,410 @@ int addDiskUsageToDevice(struct DeviceInfo *linuxDiskUsage,
 }
 
 /*****************************************************************************
+ Function   : getDmType()
+ Description: 获取该文件系统的类型
+ Input      : char *szLine                              dmsetup读取内容
+ Output     : char *pParentMajor                        父节点主设备号
+              char *pParentMinor                        父节点从设备号
+              int *pStripCnt                            父节点个数
+ Return     : SUCC = success, ERROR = failure
+ Other      : N/A
+ History    : 2016.11.11
+ *****************************************************************************/
+int getDmType(int devID, int *pDmType)
+{
+    char szCmd[64] = {0};
+    FILE *fpDmCmd = NULL;
+    char szLine[MAX_STR_LEN] = {0};
+
+    (void)snprintf_s(szCmd, sizeof(szCmd), sizeof(szCmd), "dmsetup table -j %d -m %d", major(devID), minor(devID));
+    fpDmCmd = openPipe(szCmd, "r");
+    if (NULL == fpDmCmd)
+    {
+        printf("openPipe error \n");
+        return ERROR;
+    }
+
+    /* 循环读取命令执行结果的文件指针 */
+    if(NULL == fgets(szLine, sizeof(szLine), fpDmCmd))
+    {
+        (void)pclose(fpDmCmd);
+        fpDmCmd = NULL;
+        return ERROR;
+    }
+
+    if (strstr(szLine, "striped") != NULL)
+    {
+        *pDmType = DM_STRIPED;
+    }
+    else if (strstr(szLine, "crypt") != NULL)
+    {
+        *pDmType = DM_CRYPT;
+    }
+    else if (strstr(szLine, "linear") != NULL)
+    {
+        *pDmType = DM_LINEAR;
+    }
+    else if (strstr(szLine, "snapshot") != NULL)
+    {
+        *pDmType = DM_SNAPSHOT;
+    }
+    else if (strstr(szLine, "raid") != NULL)
+    {
+        *pDmType = DM_RAID;
+    }
+    else if (strstr(szLine, "mirror") != NULL)
+    {
+        *pDmType = DM_MIRROR;
+    }
+    else
+    {
+        *pDmType = DM_UNKNOWN;
+    }
+
+    (void)pclose(fpDmCmd);
+    fpDmCmd = NULL;
+    return SUCC;
+}
+
+/*****************************************************************************
+ Function   : getDmStripParentNode()
+ Description: strip情况下，获取该文件系统的父节点名
+ Input      : char *szLine                              dmsetup读取内容
+ Output     : char *pParentMajor                        父节点主设备号
+              char *pParentMinor                        父节点从设备号
+              int *pStripCnt                            父节点个数
+ Return     : SUCC = success, ERROR = failure
+ Other      : N/A
+ History    : 2016.11.11
+ *****************************************************************************/
+int getDmStripParentNode(int devID, struct DmInfo **pstDmInfo, int *pStripCnt)
+{
+    char szCmd[64] = {0};
+    FILE *fpDmCmd = NULL;
+    char szLine[MAX_STR_LEN] = {0};
+    int i = 0;
+    char *tmp = NULL;
+    struct DmInfo *pDmInfo = NULL;
+
+    (void)snprintf_s(szCmd, sizeof(szCmd), sizeof(szCmd), "dmsetup table -j %d -m %d", major(devID), minor(devID));
+    fpDmCmd = openPipe(szCmd, "r");
+    if (NULL == fpDmCmd)
+    {
+        return ERROR;
+    }
+
+    if(NULL == fgets(szLine, sizeof(szLine), fpDmCmd))
+    {
+        (void)pclose(fpDmCmd);
+        fpDmCmd = NULL;
+        return ERROR;
+    }
+    (void)pclose(fpDmCmd);
+    fpDmCmd = NULL;
+
+    if (sscanf_s(szLine, "%*d %*d %*s %d %*[^\n ]", pStripCnt) != 1)
+    {
+        return ERROR;
+    }
+
+    if(*pStripCnt <= 0)
+    {
+        return ERROR;
+    }
+
+    pDmInfo = (struct DmInfo *)malloc((*pStripCnt) * sizeof(struct DmInfo));
+    if (NULL == pDmInfo)
+    {
+        return ERROR;
+    }
+    (void)memset_s(pDmInfo, (*pStripCnt) * sizeof(struct DmInfo), 0, (*pStripCnt) * sizeof(struct DmInfo));
+
+    /* 处理形如0 16777216 striped 2 128 202:160 8390656 202:176 8390656的字符串，跳过前面5个字符串 */
+    tmp = szLine;
+    while (i < 5)
+    {
+        tmp = strchr(tmp, ' ');
+        tmp+=1;
+        i++;
+    }
+
+    /* 开始处理202:160 8390656，取出父节点设备号 */
+    i = 0;
+    while (i < *pStripCnt)
+    {
+        if (sscanf_s(tmp, "%d:%d %*[^\n ]", &pDmInfo[i].nParentMajor, &pDmInfo[i].nParentMinor) != 2)
+        {
+            free(pDmInfo);
+            return ERROR;
+        }
+        tmp = strchr(tmp, ' ');
+        tmp+=1;
+        tmp = strchr(tmp, ' ');
+        tmp+=1;
+        i++;
+    }
+
+    *pstDmInfo = pDmInfo;
+    return SUCC;
+}
+
+/*****************************************************************************
+ Function   : getDmLinearParentNodeCount()
+ Description: linear情况下，获取该文件系统的父节点名
+ Input      : struct DevMajorMinor* devMajorMinor       /proc/partitions中设备名及其主次设备号结构体数组
+              int partNum                               对应关系数据数量
+              int devID                                 文件系统设备号
+ Output     : char* parentName                          父节点名
+ Return     : SUCC = success, ERROR = failure
+ Other      : N/A
+ History    : 2016.11.11, created this function.
+ *****************************************************************************/
+int getDmLinearParentNode(int devID, struct DmInfo **pstDmInfo, int *pCnt)
+{
+    FILE *fpDmCmd = NULL;
+    char szCmd[128] = {0};
+    char szLine[MAX_STR_LEN] = {0};
+    int i = 0;
+    int nFlag = SUCC;
+    struct DmInfo *pDmInfo = NULL;
+
+    (void)snprintf_s(szCmd, sizeof(szCmd), sizeof(szCmd), "dmsetup table -j %d -m %d | wc -l", major(devID), minor(devID));
+    fpDmCmd = openPipe(szCmd, "r");
+    if (NULL == fpDmCmd)
+    {
+        return ERROR;
+    }
+
+    if (NULL == fgets(szLine, sizeof(szLine), fpDmCmd))
+    {
+        (void)pclose(fpDmCmd);
+        fpDmCmd = NULL;
+        return ERROR;
+    }
+    (void)pclose(fpDmCmd);
+
+    if (sscanf_s(szLine, "%d %*[^\n ]", pCnt) != 1)
+    {
+        return ERROR;
+    }
+
+    pDmInfo = (struct DmInfo *)malloc((*pCnt) * sizeof(struct DmInfo));
+    if (NULL == pDmInfo)
+    {
+        return ERROR;
+    }
+    (void)memset_s(pDmInfo, (*pCnt) * sizeof(struct DmInfo), 0, (*pCnt) * sizeof(struct DmInfo));
+
+    (void)snprintf_s(szCmd, sizeof(szCmd), sizeof(szCmd), "dmsetup table -j %d -m %d", major(devID), minor(devID));
+    fpDmCmd = openPipe(szCmd, "r");
+    if (NULL == fpDmCmd)
+    {
+        free(pDmInfo);
+        pDmInfo = NULL;
+        return ERROR;
+    }
+
+    while (fgets(szLine, sizeof(szLine), fpDmCmd))
+    {
+        if (sscanf_s(szLine, "%*d %lld %*s %d:%d %*[^\n ]", &pDmInfo[i].nSectorNum, &pDmInfo[i].nParentMajor, &pDmInfo[i].nParentMinor) != 3)
+        {
+            nFlag = ERROR;
+            free(pDmInfo);
+            pDmInfo = NULL;
+            break;
+        }
+        i++;
+    }
+
+    (void)pclose(fpDmCmd);
+    fpDmCmd = NULL;
+    *pstDmInfo = pDmInfo;
+
+    return nFlag;
+}
+
+/*****************************************************************************
+ Function   : getDmCryptParentNode()
+ Description: crypt情况下，获取该文件系统的父节点名
+ Input      : char *szLine                              dmsetup读取内容
+ Output     : char *pParentMajor                        父节点主设备号
+              char *pParentMinor                        父节点从设备号
+              int *pStripCnt                            父节点个数
+ Return     : SUCC = success, ERROR = failure
+ Other      : N/A
+ History    : 2016.11.11
+ *****************************************************************************/
+int getDmCryptParentNode(int devID, struct DmInfo **pstDmInfo, int *pCnt)
+{
+    char szCmd[64] = {0};
+    FILE *fpDmCmd = NULL;
+    char szLine[MAX_STR_LEN] = {0};
+    int i = 0;
+    struct DmInfo *pDmInfo = NULL;
+
+    (void)snprintf_s(szCmd, sizeof(szCmd), sizeof(szCmd), "dmsetup table -j %d -m %d", major(devID), minor(devID));
+    fpDmCmd = openPipe(szCmd, "r");
+    if (NULL == fpDmCmd)
+    {
+        return ERROR;
+    }
+
+    pDmInfo = (struct DmInfo *)malloc(sizeof(struct DmInfo));
+    if (NULL == pDmInfo)
+    {
+        (void)pclose(fpDmCmd);
+        fpDmCmd = NULL;
+        return ERROR;
+    }
+    (void)memset_s(pDmInfo, sizeof(struct DmInfo), 0, sizeof(struct DmInfo));
+
+    while (fgets(szLine, sizeof(szLine), fpDmCmd))
+    {
+        if(i > 0 || sscanf_s(szLine, "%*d %*d %*s %*s %*s %*d %d:%d %*[^\n ]", &pDmInfo[i].nParentMajor, &pDmInfo[i].nParentMinor) != 2)
+        {
+            free(pDmInfo);
+            pDmInfo = NULL;
+            (void)pclose(fpDmCmd);
+            fpDmCmd = NULL;
+            return ERROR;
+        }
+        i++;
+    }
+
+    (void)pclose(fpDmCmd);
+    fpDmCmd = NULL;
+
+    /* 加密格式只有1个父节点 */
+    *pCnt = 1;
+    *pstDmInfo = pDmInfo;
+    return SUCC;
+}
+
+/*****************************************************************************
+ Function   : getDmParentNode()
+ Description: 根据文件系统设备号，获取该文件系统的父节点名
+ Input      : struct DevMajorMinor* devMajorMinor       /proc/partitions中设备名及其主次设备号结构体数组
+              int partNum                               对应关系数据数量
+              int devID                                 文件系统设备号
+ Output     : char* parentName                          父节点名
+ Return     : SUCC = success, ERROR = failure
+ Other      : N/A
+ History    : 2011.09.16, created this function.
+ *****************************************************************************/
+int getDmParentNode(struct DeviceInfo *linuxDiskUsage, struct DevMajorMinor *devMajorMinor, struct NumberCount numCnt, int devID, long long usage)
+{
+    char szRealName[MAX_NAME_LEN] = {0};
+    int nParentDevID = 0;
+    int nFlag = SUCC;
+    int nParentCnt = 0;
+    struct DmInfo *pstDmInfo = NULL;
+    int i = 0;
+    char szUsage[64] = {0};
+    char szDiskName[MAX_NAME_LEN] = {0};
+    int nDmType = 0;
+    long long lsubusage = 0L;
+    long long lpvSize = 0L;
+
+    if(SUCC != getDmType(devID, &nDmType))
+    {
+        return ERROR;
+    }
+
+    switch(nDmType)
+    {
+        case DM_LINEAR:
+        {
+            if(SUCC != getDmLinearParentNode(devID, &pstDmInfo, &nParentCnt))
+            {
+                return ERROR;
+            }
+            break;
+        }
+        case DM_STRIPED:
+        {
+            if(SUCC != getDmStripParentNode(devID, &pstDmInfo, &nParentCnt))
+            {
+                return ERROR;
+            }
+            break;
+        }
+        case DM_CRYPT:
+        {
+            if(SUCC != getDmCryptParentNode(devID, &pstDmInfo, &nParentCnt))
+            {
+                return ERROR;
+            }
+            break;
+        }
+        case DM_RAID:
+        case DM_SNAPSHOT:
+        case DM_MIRROR:
+        default:
+        {
+            /* 暂时返回成功，继续解析其他盘 */
+            return SUCC;
+        }
+    }
+
+    for (i = 0; i < nParentCnt && usage > 0; i++)
+    {
+        /* 加密类型nParentCnt=1，和条块化类型做相同处理 */
+        if (DM_CRYPT == nDmType || DM_STRIPED == nDmType)
+        {
+            lsubusage = usage / nParentCnt;
+        }
+        else
+        {
+            lpvSize = pstDmInfo[i].nSectorNum * SECTOR_SIZE / MEGATOBYTE;
+
+            if (usage >= lpvSize)
+            {
+                lsubusage = lpvSize;
+                usage -= lpvSize;
+            }
+            else
+            {
+                lsubusage = usage;
+                usage = 0;
+            }
+        }
+
+        nParentDevID = makedev(pstDmInfo[i].nParentMajor, pstDmInfo[i].nParentMinor);
+        if (g_deviceMapperNum == pstDmInfo[i].nParentMajor)
+        {
+            if (SUCC != getDmParentNode(linuxDiskUsage, devMajorMinor, numCnt, nParentDevID, lsubusage))
+            {
+                nFlag = ERROR;
+                break;
+            }
+        }
+        else
+        {
+            (void)memset_s(szRealName, MAX_NAME_LEN, 0, MAX_NAME_LEN);
+            (void)memset_s(szDiskName, MAX_NAME_LEN, 0, MAX_NAME_LEN);
+            (void)getInfoFromID(devMajorMinor, numCnt.partNum, nParentDevID, szRealName, NULL);
+            if(ERROR == getDiskNameFromPartName(szRealName, szDiskName))
+            {
+                nFlag = ERROR;
+                break;
+            }
+            if (0 != strlen(szRealName))
+            {
+                /* 通过addDiskUsageToDevice函数，将遍历到的分区使用空间累加到对应的磁盘上 */
+                (void)snprintf_s(szUsage, sizeof(szUsage), sizeof(szUsage), "%lld", lsubusage);
+                (void)addDiskUsageToDevice(linuxDiskUsage, numCnt.diskNum, szRealName, szUsage);
+                (void)memset_s(szRealName, MAX_NAME_LEN, 0, sizeof(szRealName));
+            }
+        }
+    }
+
+    free(pstDmInfo);
+    return nFlag;
+}
+
+
+/*****************************************************************************
  Function   : getAllDeviceUsage()
  Description: 所有的分区信息累加到对应磁盘的使用空间中
  Input      : struct DevMajorMinor* devMajorMinor      设备名及其主次设备号结构体数组
@@ -1497,10 +1841,12 @@ int getAllDeviceUsage(struct DevMajorMinor *devMajorMinor, struct DeviceInfo *li
     struct DiskInfo *tmpDisk = NULL;
     /* 存放drbd设备对应的父设备名及主次设备号 */
     struct stat statBuf;
+    long long usage = 0L;
 
     for (i = 0; i < numberCount.mountNum; i++)
     {
         tmpDisk = diskMap + i;
+        usage = atoll(tmpDisk->usage);
 
         /* 当mount记录的文件系统是drbd设备时，需要找到对应的父设备 */
         if (NULL != strstr(tmpDisk->filesystem, "drbd"))
@@ -1519,7 +1865,7 @@ int getAllDeviceUsage(struct DevMajorMinor *devMajorMinor, struct DeviceInfo *li
         if (g_deviceMapperNum == major(tmpDisk->st_rdev))
         {
             /* 通过dmsetup，获取逻辑卷对应父设备名 */
-            nResult = getDmParentNode(devMajorMinor, numberCount.partNum, tmpDisk->st_rdev, szParentName);
+            nResult = getDmParentNode(linuxDiskUsage, devMajorMinor, numberCount, tmpDisk->st_rdev, usage);
             if (ERROR == nResult)
             {
                 return ERROR;
@@ -1527,19 +1873,13 @@ int getAllDeviceUsage(struct DevMajorMinor *devMajorMinor, struct DeviceInfo *li
         }
         else
         {
-            /* 如果非逻辑卷，则直接将卷名赋值给父节点名，便于后面统一寻找根节点 */
             (void)getInfoFromID(devMajorMinor, numberCount.partNum, tmpDisk->st_rdev, szParentName, NULL);
-        }
-
-        /*
-         * 如果szParentName的长度不为0，说明mount记录下的卷已经找到了在/proc/partitions下的对应分区或磁盘名
-         * 如果为0，说明mount的记录不在统计磁盘利用率的范围内，不进行计算
-         */
-        if (0 != strlen(szParentName))
-        {
-            /* 通过addDiskUsageToDevice函数，将遍历到的分区使用空间累加到对应的磁盘上 */
-            (void)addDiskUsageToDevice(linuxDiskUsage, numberCount.diskNum, szParentName, tmpDisk->usage);
-            memset_s(szParentName, MAX_NAME_LEN, 0, sizeof(szParentName));
+            if (0 != strlen(szParentName))
+            {
+                /* 通过addDiskUsageToDevice函数，将遍历到的分区使用空间累加到对应的磁盘上 */
+                (void)addDiskUsageToDevice(linuxDiskUsage, numberCount.diskNum, szParentName, tmpDisk->usage);
+                (void)memset_s(szParentName, MAX_NAME_LEN, 0, sizeof(szParentName));
+            }
         }
     }
 
@@ -1587,14 +1927,14 @@ void freeSpace(struct DevMajorMinor *devMajorMinor, struct DeviceInfo *linuxDisk
  Return     : SUCC = success, ERROR = failure
  Other      : N/A
  *****************************************************************************/
-int getDiskUsage(struct xs_handle *handle, char *pszDiskUsage)
+int getDiskUsage(struct xs_handle *handle, char pszDiskUsage[][MAX_DISKUSAGE_LEN], int *row_num)
 {
     /* 存储总磁盘空间信息字符串(单位为MB) */
     char szTotalSize[MAX_DISKUSAGE_LEN] = {0};
     /* 存储总使用空间信息字符串(单位为MB) */
     char szTotalUsage[MAX_DISKUSAGE_LEN] = {0};
     /* 存储每个磁盘信息连接的字符串 */
-    char szUsageString[MAX_DISKUSAGE_LEN] = {0};
+    char szUsageString[MAX_ROWS][MAX_DISKUSAGE_LEN] = {0};
     struct DevMajorMinor *devMajorMinor;
     struct DeviceInfo *linuxDiskUsage;
     struct DiskInfo *diskMap = NULL;
@@ -1602,6 +1942,11 @@ int getDiskUsage(struct xs_handle *handle, char *pszDiskUsage)
     int nSwapNum;
     int nResult = 0;
     int i;
+
+    if (!pszDiskUsage || !row_num)
+        return ERROR;
+
+    *row_num = 0;
 
     devMajorMinor = (struct DevMajorMinor *)malloc(MAX_DISKUSAGE_LEN * sizeof(struct DevMajorMinor));
     if (NULL == devMajorMinor)
@@ -1688,21 +2033,28 @@ int getDiskUsage(struct xs_handle *handle, char *pszDiskUsage)
         /* 将获取出来的信息转化为字符串，并且计算其总空间大小 */
         (void)strAdd(linuxDiskUsage[i].deviceTotalSpace, szTotalSize, szTotalSize);
         (void)strAdd(linuxDiskUsage[i].diskUsage, szTotalUsage, szTotalUsage);
-        //最多只拼接12个利用率信息(1个光驱+11个磁盘)，防止在60个磁盘的场景下出现磁盘扩展信息被截断的问题
-        if(i <= MAX_DISKUSAGE_STRING_NUM)
-        {
-            (void)snprintf_s(szUsageString + strlen(szUsageString), 
-                            (MAX_DISKUSAGE_LEN - strlen(szUsageString)), 
-                            (MAX_DISKUSAGE_LEN - strlen(szUsageString)), 
+        //最多只拼接61个利用率信息(1个光驱+60个磁盘)
+        if(i <= MAX_DISKUSAGE_STRING_NUM) {
+            *row_num = i / MAX_DISKUSAGE_NUM_PER_KEY;
+            (void)snprintf_s(szUsageString[*row_num] + strlen(szUsageString[*row_num]), 
+                            (MAX_DISKUSAGE_LEN - strlen(szUsageString[*row_num])), 
+                            (MAX_DISKUSAGE_LEN - strlen(szUsageString[*row_num])), 
                             "%s:%s:%s;",
                             linuxDiskUsage[i].phyDevName, 
                             linuxDiskUsage[i].deviceTotalSpace, 
                             linuxDiskUsage[i].diskUsage);
         }
     }
+
     /* 将总的磁盘空间和使用空间以及最终的每个磁盘的使用率对应的字符串，串联赋值给出参 */
-    (void)snprintf_s(pszDiskUsage, MAX_DISKUSAGE_LEN, MAX_DISKUSAGE_LEN, 
-                    "0:%s:%s;%s", szTotalSize, szTotalUsage, szUsageString);
+    for (i = 0; i <= *row_num; i++) {
+        if (0 == i)
+            (void)snprintf_s(pszDiskUsage[i], MAX_DISKUSAGE_LEN, MAX_DISKUSAGE_LEN, 
+                    "0:%s:%s;%s", szTotalSize, szTotalUsage, szUsageString[i]);
+        else
+            (void)snprintf_s(pszDiskUsage[i], MAX_DISKUSAGE_LEN, MAX_DISKUSAGE_LEN, 
+                    "%s", szUsageString[i]);
+    }
 
     freeSpace(devMajorMinor, linuxDiskUsage, diskMap);
 
@@ -1801,8 +2153,9 @@ int FilesystemUsage(struct xs_handle *handle)
  *****************************************************************************/
 int diskworkctlmon(struct xs_handle *handle)
 {
-    char szDiskUsage[MAX_DISKUSAGE_LEN] = {0};
+    char szDiskUsage[MAX_ROWS][MAX_DISKUSAGE_LEN] = {0};
     int nRet;
+    int row_num = 0;
 
     if (NULL == handle)
     {
@@ -1810,35 +2163,65 @@ int diskworkctlmon(struct xs_handle *handle)
     }
 
     /* 调用函数返回磁盘利用率字符串 */
-    nRet = getDiskUsage(handle, szDiskUsage);
-    if ( ERROR == nRet)
+    nRet = getDiskUsage(handle, szDiskUsage, &row_num);
+    if (ERROR == nRet)
     {
         /*失败写入error*/
-        if(xb_write_first_flag == 0)
-        {
-            write_to_xenstore(handle, DISK_DATA_PATH, "error");
-        }
-        else
-        {
-            write_weak_to_xenstore(handle, DISK_DATA_PATH, "error");
-        }
+        write_xs_disk(handle, xb_write_first_flag, szDiskUsage, 0);
         return ERROR;
     }
     else
     {
-        if(xb_write_first_flag == 0)
-        {
-            /*如果返回成功，写入磁盘利用率信息*/
-            write_to_xenstore(handle, DISK_DATA_PATH, szDiskUsage);
-        }
-        else
-        {
-            write_weak_to_xenstore(handle, DISK_DATA_PATH, szDiskUsage);
-        }
+        write_xs_disk(handle, xb_write_first_flag, szDiskUsage, row_num + 1);
     }
-    if(g_exinfo_flag_value & EXINFO_FLAG_FILESYSTEM)
+
+    if (g_exinfo_flag_value & EXINFO_FLAG_FILESYSTEM)
     {
         (void)FilesystemUsage(handle);
     }
     return SUCC;
+}
+
+void write_xs_disk(struct xs_handle *handle, int is_weak, char xs_value[][MAX_DISKUSAGE_LEN], int row_num)
+{
+    int i = 0;
+    char xs_path[MAX_DISKUSAGE_LEN] = {0};
+
+    if (!handle || !xs_value)
+        return;
+    if (MAX_ROWS < row_num)
+        return;
+
+    if (0 == row_num) {
+        for (i = 0; i < MAX_ROWS; i++) {
+            if (0 == i)
+                (void)snprintf_s(xs_path, MAX_DISKUSAGE_LEN, MAX_DISKUSAGE_LEN, "%s", DISK_DATA_PATH);
+            else
+                (void)snprintf_s(xs_path, MAX_DISKUSAGE_LEN, MAX_DISKUSAGE_LEN, "%s-%d", DISK_DATA_EXT_PATH, i);
+
+            if (is_weak)
+                write_weak_to_xenstore(handle, xs_path, "error");
+            else
+                write_to_xenstore(handle, xs_path, "error");
+        }
+    } else {
+        for (i = 0; i < row_num; i++) {
+            if (0 == i)
+                (void)snprintf_s(xs_path, MAX_DISKUSAGE_LEN, MAX_DISKUSAGE_LEN, "%s", DISK_DATA_PATH);
+            else
+                (void)snprintf_s(xs_path, MAX_DISKUSAGE_LEN, MAX_DISKUSAGE_LEN, "%s-%d", DISK_DATA_EXT_PATH, i);
+
+            if (is_weak)
+                write_weak_to_xenstore(handle, xs_path, xs_value[i]);
+            else
+                write_to_xenstore(handle, xs_path, xs_value[i]); 
+        }
+        for (; i < MAX_ROWS; i++) {
+            (void)snprintf_s(xs_path, MAX_DISKUSAGE_LEN, MAX_DISKUSAGE_LEN, "%s-%d", DISK_DATA_EXT_PATH, i);
+            if (is_weak)
+                write_weak_to_xenstore(handle, xs_path, "0");
+            else
+                write_to_xenstore(handle, xs_path, "0");
+        }
+    }
 }

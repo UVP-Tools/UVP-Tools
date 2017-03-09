@@ -87,7 +87,7 @@ extern "C" {
 #define CPU_TIME_PATH            "control/uvp/cpuusage"
 
 #define ERROR -1
-#define UNKNOWN ERROR
+#define UNKNOWN -2
 #define SUCC   0
 
 
