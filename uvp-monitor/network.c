@@ -38,9 +38,7 @@
 #include <errno.h>
 
 #define NIC_MAX  15
-//#define SRIOV_NIC  "00:ff:ff"
 #define NORMAL_NIC  "fe:ff:ff"
-//#define SRIOVNIC_PATH "control/uvp/sriov_mac"
 #define VIF_MAX 7
 #define UPFLAG  1
 #define DOWNFLAG 0
@@ -1214,6 +1212,7 @@ int GetBondVifGateway(const char *ifname,char **gateway)
     char pszGatewayBuf[VIF_NAME_LENGTH] = {0};
     FILE *iRet;
     int skt;
+
     skt = openNetSocket();
     if (ERROR == skt)
     {
@@ -1222,6 +1221,7 @@ int GetBondVifGateway(const char *ifname,char **gateway)
 
     if(SUCC != CheckName(ifname))
     {
+        NetworkDestroy(skt);
         return ERROR;
     }
 
@@ -1232,10 +1232,10 @@ int GetBondVifGateway(const char *ifname,char **gateway)
     iRet = openPipe(pathBuf, "r");
     if (NULL == iRet)
     {
-       DEBUG_LOG("Failed to exec route shell command.");
-       *gateway = NULL;
-       NetworkDestroy(skt);
-       return 0;
+        DEBUG_LOG("Failed to exec route shell command.");
+        *gateway = NULL;
+        NetworkDestroy(skt);
+        return 0;
     }
     /*保存读取的网关信息*/
     if(NULL != fgets(pszGatewayBuf,sizeof(pszGatewayBuf),iRet))
