@@ -32,12 +32,44 @@
 #include "libxenctl.h"
 #include "securec.h"
 #include "uvpmon.h"
+#include <public_common.h>
 
 #define PROC_MEMINFO "/proc/meminfo"
 #define MEM_DATA_PATH  "control/uvp/memory"
 #define SWAP_MEM_DATA_PATH  "control/uvp/mem_swap"
 #define TMP_BUFFER_SIZE 255
 #define DECIMAL 10
+
+#define SHELL_BUFFER 256
+
+int is_suse()
+{
+    FILE *pF = NULL;
+    char strIssue[SHELL_BUFFER] = {0};
+
+    if(0 == access("/etc/SuSE-release", R_OK))
+    {
+        return 1;
+    }
+    pF = fopen("/etc/issue", "r");
+    if (NULL == pF)
+    {
+        ERR_LOG("[Monitor-Upgrade]: open /etc/issue fail.");
+        return 0;
+    }
+
+    while(fgets(strIssue, SHELL_BUFFER-1, pF) != NULL)
+    {
+        if (strstr(strIssue, "SUSE"))
+        {
+            fclose(pF);
+            return 1;
+        }
+    }
+
+    fclose(pF);
+    return 0;
+}
 
 /*****************************************************************************
 Function   : GetMMUseRatio

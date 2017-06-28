@@ -67,7 +67,6 @@
 
 #define UVP_UNPLUG_DISK "control/uvp/unplug-disk"
 
-#define UVP_MOUNTISO_PATH "control/uvp/upgrade/mountiso"
 #define CUR_PVDRIVER_VERSION "control/uvp/pvdriver-version"
 /*热迁移完成的标志位*/
 #define COMPLETE_RESTORE  "control/uvp/completerestore-flag"
@@ -89,24 +88,8 @@
 
 bool   hibernate_migrate_flag = 0;
 
-
-/*tools upgrade*/
-#define DIR_VERSION_TOOLS "/etc/.tools_upgrade/"
-#define DIR_VERSION_TOOLS_TMP "/var/run/tools_upgrade/"
-#define FILE_PVDRIVER_VERSION_TMP "/var/run/tools_upgrade/pvdriver_version.ini"
-#define UVP_TOOLS_VERSION "control/uvp/upgrade/version"
-#define UVP_VERSION_INFO "control/uvp/upgrade/version/info"
-#define UVP_TOOLS_FLAG "control/uvp/upgrade/tools_flag"
-#define UVP_TIP_MESSAGE "control/uvp/domutray/tipinfo"
-#define FILE_OLD_VERSION "/var/run/uvp-monitor.ini"
-#define UVP_TIP_START "UVP TOOLS is upgrading, donot shutdown or restart your computer."
-#define UVP_TIP_END "UVP TOOLS is upgraded successfully, Restart your computer please."
-#define UVP_MONITOR_TIP_END "UVP TOOLS is upgraded successfully."
-#define UVP_TIP_OVER "UVP TOOLS upgrade over."
-
 /* 查询版本信息等不变信息的键值 */
 #define PVDRIVER_STATIC_INFO_PATH "control/uvp/static-info-flag"
-#define UPGRADE_STRATEGY "control/uvp/upgrade/upgrade_strategy"
 
 //新libvirt 对应的 ipv6 特征键值
 #define NETINFO_FEATURE_PATH  "control/uvp/netinfo_feature"
@@ -118,9 +101,6 @@ bool   hibernate_migrate_flag = 0;
 #define LOG_LEVEL_SIZE          8
 #define DEFAULT_VERSION         "error"
 #define DEFAULT_PATH            "/etc/.uvp-monitor/version.ini"
-
-#define UVP_UPGRADE_RESULT_PATH "control/uvp/upgrade/result"
-#define UVP_UPGRADE_FLAG_PATH   "control/uvp/upgrade_flag"
 
 /* 一致性快照 */
 #define STORAGE_SNAPSHOT_FLAG   "control/uvp/storage_snapshot_flag"
@@ -333,15 +313,6 @@ void SetPvDriverVer(void *handle)
     char tmp_version[20];
     int count = 0;
 
-    pFileVer = fopen(FILE_OLD_VERSION, "r");
-    if (NULL != pFileVer)
-    {
-        (void)fgets(CurrentPath, SHELL_BUFFER, pFileVer);
-        write_to_xenstore(handle, PVDRIVER_VERSION, trim(CurrentPath));
-        fclose(pFileVer);
-        return;
-    }
-
     pFileVer = fopen(DEFAULT_PATH, "r");
     if (NULL == pFileVer)
     {
@@ -441,131 +412,7 @@ void write_to_file()
     fprintf(fo, "%s\n", str);
     fclose(fo);
 }
-/*****************************************************************************
-Function   : set_tools_version
-Description:向xenstore写入组件的版本。
-Input       :phandle xenstore句柄
-Input       : None
-Return     : None
-*****************************************************************************/
-void set_tools_version(void *handle)
-{
-    FILE *fver = NULL;
-    char pathBuf[SHELL_BUFFER] = {0};
-    char xenpathBuf[SHELL_BUFFER] = {0};
-    char mouduleBuf[SHELL_BUFFER] = {0};
-    char versionBuf[SHELL_BUFFER] = {0};
-    DIR *dir = NULL;
-    char *dirname = NULL;
-    char *start = NULL;
-    struct dirent *ptr;
-    int i;
 
-    if( 0 == access(DIR_VERSION_TOOLS_TMP, R_OK))
-    {
-        dir = opendir(DIR_VERSION_TOOLS_TMP);
-        dirname = DIR_VERSION_TOOLS_TMP;
-    }
-    else
-    {
-        dir = opendir(DIR_VERSION_TOOLS);
-        dirname = DIR_VERSION_TOOLS;
-    }
-
-    if (NULL == dir)
-    {
-        (void)mkdir(DIR_VERSION_TOOLS, 0640);
-        return;
-    }
-
-    while(NULL != (ptr = readdir(dir)))
-    {
-        start = strstr(ptr->d_name, "_version.ini");
-        if (NULL == start)
-        {
-            continue;
-        }
-        i = start - ptr->d_name;
-        (void)memset_s(mouduleBuf, SHELL_BUFFER, 0, SHELL_BUFFER);
-        (void)memcpy_s(mouduleBuf, SHELL_BUFFER, ptr->d_name, i);
-
-        (void)memset_s(xenpathBuf, SHELL_BUFFER, 0, SHELL_BUFFER);
-        (void)snprintf_s(xenpathBuf, SHELL_BUFFER, SHELL_BUFFER, "%s/%s", UVP_TOOLS_VERSION, mouduleBuf);
-
-        (void)memset_s(pathBuf, SHELL_BUFFER, 0, SHELL_BUFFER);
-        (void)snprintf_s(pathBuf, SHELL_BUFFER, SHELL_BUFFER, "%s%s", dirname, ptr->d_name);
-
-        fver = fopen(pathBuf, "r");
-        if (NULL == fver)
-        {
-            DEBUG_LOG("Open version file failed, errno=%d.", errno);
-            continue;
-        }
-        (void)memset_s(versionBuf, SHELL_BUFFER, 0, SHELL_BUFFER);
-        (void)fgets(versionBuf, SHELL_BUFFER - 1, fver);
-
-        fclose(fver);
-
-        if ( '\0' == versionBuf[0] )
-        {
-            write_to_xenstore(handle, xenpathBuf, "no_version");
-            continue;
-        }
-        write_to_xenstore(handle, xenpathBuf, trim(versionBuf));
-    }
-    (void)closedir(dir);
-}
-/*****************************************************************************
-Function   : set_tip_message
-Description:tools 升级弹出提示信息
-Input       :phandle xenstore句柄
-Input       : None
-Return     : None
-*****************************************************************************/
-void set_tip_message(void *handle)
-{
-    char *pathValue = NULL;
-    char buf[BUFFER_SIZE] = {0};
-
-    pathValue = read_from_xenstore(handle, UVP_TIP_MESSAGE);
-    if ( NULL == pathValue || pathValue[0] == '\0')
-    {
-        if (NULL != pathValue)
-        {
-            free(pathValue);
-            //lint -save -e438
-            pathValue = NULL;
-        }
-        return;
-        //lint -restore
-    }
-    if (!strcmp(pathValue, "start-upgrade"))
-    {
-        (void)snprintf_s(buf, BUFFER_SIZE - 1, BUFFER_SIZE - 1, "echo %s | wall", UVP_TIP_START);
-        (void)system(buf);
-    }
-    else if(!strcmp(pathValue, "end-upgrade"))
-    {
-        (void)snprintf_s(buf, BUFFER_SIZE - 1, BUFFER_SIZE - 1, "echo %s | wall", UVP_TIP_END);
-        (void)system(buf);
-    }
-    else if(!strcmp(pathValue, "monitor-ok"))
-    {
-	(void)snprintf_s(buf, BUFFER_SIZE - 1, BUFFER_SIZE - 1, "echo %s | wall", UVP_MONITOR_TIP_END);
-	(void)system(buf);
-    }
-    else if(!strcmp(pathValue, "over-upgrade"))
-    {
-        (void)snprintf_s(buf, BUFFER_SIZE - 1, BUFFER_SIZE - 1, "echo %s | wall", UVP_TIP_OVER);
-        (void)system(buf);
-    }
-    if (NULL != pathValue)
-    {
-        free(pathValue);
-        //lint -save -e438
-        pathValue = NULL;
-    }//lint -restore
-}
 /*****************************************************************************
 Function   : write_unplugdisk_flag
  Description:
@@ -582,6 +429,7 @@ void write_unplugdisk_flag(void* phandle)
     write_to_xenstore(phandle, UVP_UNPLUG_DISK, "uvptoken");
 
 }
+
 /*****************************************************************************
 Function   : uvp_regwatch
 Description:注册watch
@@ -602,7 +450,6 @@ void uvp_regwatch(void *phandle)
     (void)regwatch(phandle, COMPLETE_RESTORE, "0");
     (void)regwatch(phandle, DRIVER_RESUME_FLAG, "uvptoken");
     /* 为了在迁移后触发一次性能获取 */
-    (void)regwatch(phandle, UVP_MOUNTISO_PATH , "uvptoken");
     (void)regwatch(phandle, MIGRATE_FLAG, "0");
     (void)regwatch(phandle, RELEASE_BOND, "0");
     (void)regwatch(phandle, REBOND_SRIOV, "0");
@@ -619,7 +466,6 @@ void uvp_regwatch(void *phandle)
 
     (void)regwatch(phandle, XS_HEART_BEAT_RATE, "0");
     (void)regwatch(phandle, UVP_UNPLUG_DISK , "uvptoken");
-    (void)regwatch(phandle, HEALTH_CHECK_PATH, "0");
     (void)regwatch(phandle, OS_CMD_XS_PATH, "0");
 }
 
@@ -643,7 +489,6 @@ void uvp_unregwatch(void *phandle)
     (void)xs_unwatch(phandle, COMPLETE_RESTORE, "0");
     (void)xs_unwatch(phandle, DRIVER_RESUME_FLAG, "uvptoken");
     /* 为了在迁移后触发一次性能获取 */
-    (void)xs_unwatch(phandle, UVP_MOUNTISO_PATH , "uvptoken");
     (void)xs_unwatch(phandle, MIGRATE_FLAG, "0");
     (void)xs_unwatch(phandle, RELEASE_BOND, "0");
     (void)xs_unwatch(phandle, REBOND_SRIOV, "0");
@@ -660,8 +505,8 @@ void uvp_unregwatch(void *phandle)
 
     (void)xs_unwatch(phandle, XS_HEART_BEAT_RATE, "0");
     (void)xs_unwatch(phandle, UVP_UNPLUG_DISK , "uvptoken");
-    (void)xs_unwatch(phandle, HEALTH_CHECK_PATH , "0");
 }
+
 /*****************************************************************************
 Function   : write_feature_flag
 Description:
@@ -677,6 +522,7 @@ static void write_feature_flag(void *phandle, char *feature_flag)
     }
     write_to_xenstore(phandle, FEATURE_FLAG_WATCH_PATH, feature_flag);
 }
+
 /*****************************************************************************
 Function   : write_service_flag
 Description:向xenstore写入性能监控进程是否被kill掉的标志位，false表示进程已经被kill。
@@ -692,6 +538,7 @@ void write_service_flag(void *phandle, char *service_flag)
     }
     write_to_xenstore(phandle, SERVICE_FLAG_WATCH_PATH, service_flag);
 }
+
 /*****************************************************************************
  Function   : write_vmstate_flag
  Description:  note vm is running
@@ -708,6 +555,7 @@ void write_vmstate_flag(void *phandle, char *vm_state)
     write_to_xenstore(phandle, UVP_VM_STATE_PATH, vm_state);
 
 }
+
 /*****************************************************************************
 Function   : do_unplugdisk
  Description:
@@ -720,7 +568,6 @@ void *do_unplugdisk(void* handle)
     char  pszCommand[SHELL_BUFFER] = {0};
     char  chUnplugPath[SHELL_BUFFER] = {0};
     char  *pchUnplugDiskName = NULL;
-    //int iRet = -1;
     char pszBuff[SHELL_BUFFER] = {0};
     (void)memset(chUnplugPath, 0, SHELL_BUFFER);
     (void)snprintf(chUnplugPath, sizeof(chUnplugPath), "%s", UVP_UNPLUG_DISK);
@@ -743,6 +590,7 @@ void *do_unplugdisk(void* handle)
     }
     return pchUnplugDiskName;
 }
+
 /*****************************************************************************
  Function   : SetScsiFeature
  Description:  note this pv support scsi function
@@ -775,6 +623,7 @@ void write_pvops_flag(void *phandle, char *vm_state)
     write_to_xenstore(phandle, KERNEL_PV_OPS, vm_state);
 
 }
+
 /*****************************************************************************
  Function   : update_netinfo_flag
  Description: if libvirt has netinfo,then g_netinfo_value = 1
@@ -804,6 +653,7 @@ void set_netinfo_flag(void *handle)
         netinfoFlag = NULL;
     }
 }
+
 /*****************************************************************************
  Function   : do_wtach_functions
  Description:  DomU's extended-information watch function
@@ -858,24 +708,6 @@ void do_watch_functions_delay(void *handle)
 }
 
 /*****************************************************************************
-Function   : DoWatchEvent
-Description: 处理watch事件
-Input       :handle : xenstore的句柄 , path : xenstore路径
-Output     : None
-Return     : None
-*****************************************************************************/
-/*void DoWatchEvent(void * handle, char *path)
-{
-	if (NULL != strstr(path, UVP_PATH) || NULL != strstr(path, SERVICE_FLAG_WATCH_PATH))
-	{
-		do_watch_functions(handle);
-	}
-
-	return;
-}*/
-
-
-/*****************************************************************************
 Function   : watch_listen
 Description: 监听设备的select事件
 Input       :xsfd : 文件句柄
@@ -900,7 +732,6 @@ int watch_listen(int xsfd)
     }
 
     return ERROR;
-
 }
 
 /*****************************************************************************
@@ -951,9 +782,9 @@ void IsSupportStorageSnapshotcheck (void *handle)
 *****************************************************************************/
 void *timing_monitor(void *handle)
 {
-	char  *xenversionflag = NULL;
-	char  UpgradeOldVerInfo[VER_SIZE]= {0};
-	FILE  *UpgradeOldVerFile = NULL;
+    char  *xenversionflag = NULL;
+    char  UpgradeOldVerInfo[VER_SIZE]= {0};
+    FILE  *UpgradeOldVerFile = NULL;
 
     (void)sleep(5);
     InitBond();
@@ -962,42 +793,6 @@ void *timing_monitor(void *handle)
     //第一次写xentore必须写成功
     xb_write_first_flag = 0;
     do_watch_functions(handle);
-
-    if(0 == access("/proc/xen/version",R_OK) || 0 == access("/proc/xen_version", R_OK)
-      || 0 == access("/dev/xen/xenbus", R_OK))
-    {
-        /*upgrade from V1,procfs do not provide weakwrite function before vm reboot*/
-        UpgradeOldVerFile = fopen(FILE_OLD_VERSION,"r");
-        if(NULL != UpgradeOldVerFile)
-        {
-            (void)fgets(UpgradeOldVerInfo, VER_SIZE, UpgradeOldVerFile);
-            fclose(UpgradeOldVerFile);
-        }
-        UpgradeOldVerInfo[VER_SIZE-1]='\0';
-        if(UpgradeOldVerInfo[0] == '1')
-        {
-            xb_write_first_flag = 0;
-        }
-        else
-        {
-            xb_write_first_flag = 1;
-	      	DEBUG_LOG("PVOPS has weakwrite function.");
-        }
-    }
-    else
-    {
-        xenversionflag = read_from_xenstore(handle, UPGRADE_STRATEGY);
-        if((NULL != xenversionflag))
-        {
-            free(xenversionflag);
-            DEBUG_LOG("Xen is R2/R3 version.");
-            xb_write_first_flag = 1;
-        }
-        else
-        {
-            DEBUG_LOG("Xen is C03/C02 version.");
-        }
-    }
 
     /* 若支持一致性快照则写入vss 标志位 */
     IsSupportStorageSnapshotcheck(handle);
@@ -1512,12 +1307,10 @@ void do_complete_restore_watch(void *handle)
         INFO_LOG("Complate restore, send ndp");
         (void)system("sh /etc/init.d/xenvnet-arp 2>/dev/null");
         write_to_file();
-        //add xenstore key after migrate
-#ifdef NOT_USE_PV_UPGRADE
+        (void)write_to_xenstore(handle, CMD_RESULT_XS_PATH, chret);
         write_to_xenstore(handle, XS_NOT_USE_PV_UPGRADE, "true");
         INFO_LOG("Do not provide UVP Tools upgrade ability.");
-#endif
-        (void)write_to_xenstore(handle, CMD_RESULT_XS_PATH, chret);
+
         if(strlen(feature_str) > 0)
         {
             write_to_xenstore(handle, GUSET_OS_FEATURE, feature_str);
@@ -1640,8 +1433,8 @@ void do_driver_resume_watch(void *handle)
     {
         free(driver_resume);
     }
-
 }
+
 static int uvpexecl(const char* pszCmd)
 {
     int nRet = 0;
@@ -1874,7 +1667,6 @@ void do_watch_proc(void *handle)
     char  *migrate_start = NULL;
     char  *release_bond = NULL;
     char  *rebond = NULL;
-    char  *upgradeflag = NULL;
     char  *disableInfo_flag = NULL;
     char  *healthstate = NULL;
     char  *storage_snapshot_flag = NULL;
@@ -1903,23 +1695,10 @@ void do_watch_proc(void *handle)
 
             if (strstr(*vec, PVDRIVER_STATIC_INFO_PATH))
             {
-                write_to_xenstore(handle, UVP_TOOLS_FLAG, "1");
-                set_tools_version(handle);
                 SetPvDriverVer(handle);
-                write_tools_result(handle);
-
                 //将原动态查询的虚拟机静态信息，只在开机时写一次
                 (void)SetCpuHotplugFeature(handle);
                 SetScsiFeature(handle);
-            }
-            else if (strstr(*vec, UVP_MOUNTISO_PATH))
-            {
-            	upgradeflag = read_from_xenstore(handle, UVP_MOUNTISO_PATH);
-			    if(NULL != upgradeflag)
-				{
-					free(upgradeflag);
-				    doUpgrade(handle, vec[XS_WATCH_PATH]);
-				}
             }
             else if (NULL != strstr(*vec, CPU_HOTPLUG_SIGNAL))
             {
@@ -2052,21 +1831,6 @@ void do_watch_proc(void *handle)
                  }
                  pthread_attr_destroy (&attr);
             }
-            else if (NULL != strstr(*vec, HEALTH_CHECK_PATH))
-            {
-            	(void)memset_s(pszCommand, SHELL_BUFFER, 0, SHELL_BUFFER);
-                (void)snprintf_s(pszCommand, sizeof(pszCommand), sizeof(pszCommand), "%s", HEALTH_CHECK_PATH);
-
-                healthstate = read_from_xenstore(handle, pszCommand);
-                if((NULL != healthstate) && (0 == strcmp(healthstate, "check")))
-                {
-                    (void)do_healthcheck(handle);
-                }
-                if( NULL != healthstate )
-                {
-                    free(healthstate);
-                }
-            }
             else if ( NULL != strstr(*vec, OS_CMD_XS_PATH))
             {
                 (void)pthread_attr_init (&attr);
@@ -2085,7 +1849,6 @@ void do_watch_proc(void *handle)
     }
     close(xsfd);
     return ;
-
 }
 
 /*****************************************************************************
@@ -2104,7 +1867,6 @@ void ReleaseEnvironment(void  *handle)
         //lint -save -e438
         handle = NULL;
     }//lint -restore
-
 }
 
 /*****************************************************************************
@@ -2126,7 +1888,6 @@ void do_deamon_model(void *handle)
     ReleaseEnvironment(handle);
 }
 
-
 /*****************************************************************************
 Function   : do_monitoring
 Description:性能监控主程序
@@ -2144,115 +1905,45 @@ void *do_monitoring(void *handle)
     do_deamon_model(handle);
     return NULL;
 }
+
 /*****************************************************************************
-Function   : do_tools_watch_proc
-Description: 接收watch事件
-Input       :handle : xenstore的句柄
+Function   : exe_command
+Description: 使用system执行命令
+Input       :命令内容或路径
 Output     : None
-Return     : None
+Return     : int
 *****************************************************************************/
-void do_tools_watch_proc(void *handle)
+#define UPGRADE_SUCCESS 0
+#define MONITOR_UPGRADE_OK 3
+#define UPGRADE_ROLLBACK 5
+
+int exe_command(char *path)
 {
-    char **toolsvec;
-    int toolsxsfd = -1;
-
-    toolsxsfd = getxsfileno(handle);
-
-    if ((int) - 1 == toolsxsfd)
+    char logBuf[BUFFER_SIZE] = {0};
+    int flag,exit_value;
+    exit_value = system(path);
+    flag = WEXITSTATUS(exit_value);
+    //flag = 1,3,5的时候不需要提示重启
+    if ( (UPGRADE_SUCCESS != flag) && (MONITOR_UPGRADE_OK != flag) && (UPGRADE_ROLLBACK != flag) )
     {
-        return;
+        (void)snprintf_s(logBuf, BUFFER_SIZE - 1, BUFFER_SIZE - 1, "exe error-command:%s", path);
+        INFO_LOG("[Monitor-Upgrade]: logBuf %s",logBuf);
+        return 1;
     }
 
-
-    while (SUCC == condition())
+    if(UPGRADE_ROLLBACK == flag)
     {
-        if (SUCC == watch_listen(toolsxsfd))
+        return 5;
+    }
+
+    if(MONITOR_UPGRADE_OK == flag)
         {
-            toolsvec = readWatch(handle);
-            if (!toolsvec)
-            {
-                continue;
-            }
-
-            if (strstr(*toolsvec, UVP_VERSION_INFO))
-            {
-                set_tools_version(handle);
-            }
-            else if (strstr(*toolsvec, UVP_TIP_MESSAGE))
-            {
-                set_tip_message(handle);
-            }
-
-            free(toolsvec);
-            toolsvec = NULL;
-
+                return 3;
         }
-        if(g_monitor_restart_value == 1)
-        {
-            INFO_LOG("Condition upgrade pv unwatch.");
-            (void)xs_unwatch(handle, UVP_VERSION_INFO , "uvptoken");
-            (void)xs_unwatch(handle, UVP_TIP_MESSAGE , "uvptoken");
-            break;
-        }
-    }
-    close(toolsxsfd);
-    return ;
 
+    return 0;
 }
 
-/*****************************************************************************
-Function   : do_cp_version_files
-Description: 备份版本文件，在休眠唤醒及迁移后读取
-Input       :None
-Return     : None
-*****************************************************************************/
-void do_cp_version_files()
-{
-    char buf[BUFFER_SIZE] = {0};
-
-    if( 0 == access(FILE_PVDRIVER_VERSION_TMP, R_OK))
-    {
-        return;
-    }
-    (void)snprintf_s(buf, BUFFER_SIZE, BUFFER_SIZE,
-                    "mkdir -p %s 2>/dev/null;cp -f %s*_version.ini %s 2>/dev/null;",
-                    DIR_VERSION_TOOLS_TMP, DIR_VERSION_TOOLS, DIR_VERSION_TOOLS_TMP);
-    (void)exe_command(buf);
-
-    return;
-}
-/*****************************************************************************
-Function   : do_tools_monitoring
-Description: 升级通道监控程序
-Input       :handle xenstore句柄
-Return     : None
-*****************************************************************************/
-void *do_tools_monitoring(void *arg)
-{
-    void *thandle = NULL;
-    thandle = openxenstore();
-    if (NULL == thandle)
-    {
-        return NULL;
-    }
-    (void)regwatch(thandle, UVP_VERSION_INFO , "uvptoken");
-
-    (void)regwatch(thandle, UVP_TIP_MESSAGE , "uvptoken");
-
-    /* 将升级通道标识置1 */
-    (void)write_to_xenstore(thandle, UVP_UPGRADE_FLAG_PATH, "0");
-    (void)write_to_xenstore(thandle, UVP_TOOLS_FLAG, "1");
-
-    /* 拷贝版本号到/var/run */
-    do_cp_version_files();
-
-    do_tools_watch_proc(thandle);
-
-    xs_daemon_close(thandle);
-//    free(thandle);
-
-    return NULL;
-}
 /*****************************************************************************
 Function   : init_daemon
 Description:子进程和父进程的交互，用于监控进程被kill时，向xenstore写入标志位
@@ -2323,29 +2014,14 @@ again:
         pthread_attr_init(&attr);
         pthread_attr_setdetachstate (&attr, PTHREAD_CREATE_DETACHED);
 
-#ifdef NOT_USE_PV_UPGRADE
         write_to_xenstore(handle, XS_NOT_USE_PV_UPGRADE, "true");
         INFO_LOG("Do not provide UVP Tools upgrade ability.");
-#else
-        write_to_xenstore(handle, XS_NOT_USE_PV_UPGRADE, "false");
-        INFO_LOG("Provide UVP tools upgrade ability.");
-#endif
 
         //创建do_monitoring的线程
         iThread = pthread_create(&pthread_id, &attr, do_monitoring, (void *)handle);
         if (strcmp(strerror(iThread), "Success") != 0)
         {
             DEBUG_LOG("Create do_monitoring fail, iThread=%d.", iThread);
-            pthread_attr_destroy (&attr);
-            exit(1);
-        }
-
-        //创建do_tools_monitoring的线程
-        tThread = pthread_create(&tthread_id, &attr, do_tools_monitoring, NULL);
-
-        if (strcmp(strerror(tThread), "Success") != 0)
-        {
-            DEBUG_LOG("Create do_tools_monitoring fail, tThread=%d.", tThread);
             pthread_attr_destroy (&attr);
             exit(1);
         }

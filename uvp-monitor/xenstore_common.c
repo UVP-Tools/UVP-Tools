@@ -34,6 +34,31 @@
 #include "xenstore_common.h"
 #include "public_common.h"
 
+/*****************************************************************************
+Function   : trim
+Description: È¥µô×Ö´®Î²²¿¿Õ¸ñ
+Input      : char *
+Output     : None
+Return     : char *
+*****************************************************************************/
+char *trim(char *str)
+{
+    char *p = NULL;
+
+    if(NULL == str)
+    {
+    	return NULL;
+    }
+
+    p = str + strlen(str) - 1;
+    while(' ' == *p || '\t' == *p || '\n' == *p || '\r' == *p)
+    {
+        *p = '\0';
+        p--;
+    }
+    return str;
+}
+
 static int get_fd_from_handle(struct xs_handle * handle)
 {
     if(handle == NULL)
