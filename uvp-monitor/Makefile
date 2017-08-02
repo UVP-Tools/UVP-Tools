@@ -37,7 +37,7 @@ has_xs:
 	elif [ -f "xen-4.1.2.tar.gz" ]; then \
 		echo "You have a xen-4.1.2 source tarball."; \
 	else \
-		wget http://bits.xensource.com/oss-xen/release/4.1.2/xen-4.1.2.tar.gz; \
+		wget https://downloads.xenproject.org/release/xen/4.1.2/xen-4.1.2.tar.gz; \
 		if [ "X1" = "X$$?" ]; then \
 			echo "You must download xen-4.1.2 source tarball." \
 			exit 1; \
