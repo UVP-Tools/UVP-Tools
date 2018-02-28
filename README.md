@@ -130,6 +130,12 @@ Installing UVP Tools
     Note: If you want to know what the install script has done, run the sh -x install command to print script execution information, or read through the script. 
 
 
+  After the UVP Tools installation script has been installed successfully, run the following command to start the UVP Tools service. 
+
+        service uvp-monitor start
+
+    Note: If the uvp-monitor service start failed, you should restart your VM to start service.
+
 What can you do if a problem is encountered?
   1. Briefly describe your problem. An one-line summary is recommended.
   2. Describe your problem in detail, including environments, log information, and automatic handling of the problem.
